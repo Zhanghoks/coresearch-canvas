@@ -2,7 +2,6 @@ import { Button, Modal } from "antd";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { useAssetStore } from "@/stores/use-asset-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 
@@ -14,11 +13,9 @@ export function CanvasDeleteProjectsDialog() {
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
     const removeSelectedIds = useCanvasUiStore((state) => state.removeSelectedProjectIds);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
-    const cleanupImages = useAssetStore((state) => state.cleanupImages);
     const confirm = () => {
         const leavingCurrent = ids.some((id) => pathname === `/canvas/${id}`);
         deleteProjects(ids);
-        cleanupImages();
         removeSelectedIds(ids);
         setDeleteIds([]);
         if (leavingCurrent) navigate("/canvas");

@@ -58,8 +58,6 @@ export type CanvasNodeContext = {
     // Inter-node and inter-plugin communication.
     emit: (event: string, payload?: unknown) => void;
     on: (event: string, handler: (payload: unknown) => void) => () => void;
-    // AI image, video, and text generation using the host model configuration.
-    ai: CanvasPluginAi;
     // Opens or closes the custom panel below this node; the definition must provide a Panel.
     openPanel: () => void;
     closePanel: () => void;
@@ -83,8 +81,6 @@ export type CanvasPluginHost = {
     updateNode: (nodeId: string, patch: Partial<Pick<CanvasNodeData, "title" | "width" | "height">>) => void;
     updateMetadata: (nodeId: string, patch: CanvasNodeMetadata) => void;
     applyOps: (ops: CanvasAgentOp[]) => void;
-    // AI generation using the current canvas model and credential configuration.
-    ai: CanvasPluginAi;
     // Opens or closes the custom panel below a specified node.
     openPanel: (nodeId: string) => void;
     closePanel: () => void;

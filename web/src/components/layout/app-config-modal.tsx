@@ -1,9 +1,9 @@
 import { Button, Modal } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { useConfigStore, type ConfigTabKey } from "@/stores/use-config-store";
+import { useConfigStore } from "@/stores/use-config-store";
 
-export function AppConfigPanel({ showDoneButton = false }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
+export function AppConfigPanel({ showDoneButton = false }: { showDoneButton?: boolean }) {
     const { t } = useTranslation();
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     return (

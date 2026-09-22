@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
-import { Copy, Download, Ellipsis, FileText, FolderPlus, Info, MessageSquare, Minus, Music2, Plus, Sparkles, Trash2, Ungroup, Upload, Video } from "lucide-react";
+import { Copy, Download, FileText, Info, Maximize2, MessageSquare, Minus, Music2, Plus, Scissors, Sparkles, Trash2, Ungroup, Upload, Video, ZoomIn } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -10,9 +10,7 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, RESEARCH_FLOW_NODE_TYPES, type CanvasNodeData, type ResearchFlowNodeType, type ViewportTransform } from "@/types/canvas";
 import type { CanvasNodeToolbarItem } from "@/types/canvas-plugin";
-import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
 import { attachResearchNodeToAgent, researchNodeCopyText } from "@/lib/canvas/research-node-agent";
-import { IMAGE_QUICK_TOOLS_STORAGE_KEY, defaultImageQuickToolIds, readImageQuickToolsConfig, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
 
 type CanvasNodeHoverToolbarProps = {
     node: CanvasNodeData | null;
@@ -23,20 +21,13 @@ type CanvasNodeHoverToolbarProps = {
     onDocument: (node: CanvasNodeData) => void;
     onDecreaseFont: (node: CanvasNodeData) => void;
     onIncreaseFont: (node: CanvasNodeData) => void;
-    onToggleDialog: (node: CanvasNodeData) => void;
-    onGenerateImage: (node: CanvasNodeData) => void;
     onUpload: (node: CanvasNodeData) => void;
     onDownload: (node: CanvasNodeData) => void;
-    onSaveAsset: (node: CanvasNodeData) => void;
-    onMaskEdit: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
     onUpscale: (node: CanvasNodeData) => void;
     onSuperResolve: (node: CanvasNodeData) => void;
-    onAngle: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
-    onReversePrompt: (node: CanvasNodeData) => void;
-    onRetry: (node: CanvasNodeData) => void;
     onToggleFreeResize: (node: CanvasNodeData) => void;
     onDelete: (node: CanvasNodeData) => void;
     onUngroup?: (node: CanvasNodeData) => void;
@@ -64,41 +55,23 @@ export function CanvasNodeHoverToolbar({
     onIncreaseFont,
     onUpload,
     onDownload,
-    onSaveAsset,
+    onCrop,
+    onSplit,
+    onUpscale,
+    onSuperResolve,
+    onViewImage,
+    onToggleFreeResize,
     onDelete,
     onUngroup,
     extraTools = [],
 }: CanvasNodeHoverToolbarProps) {
-    const [quickImageToolIds, setQuickImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
-    const [showImageToolLabels, setShowImageToolLabels] = useState(false);
-    const [draftImageToolIds, setDraftImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
-    const [draftShowImageToolLabels, setDraftShowImageToolLabels] = useState(false);
-    const [imageToolSettingsOpen, setImageToolSettingsOpen] = useState(false);
     const { message } = App.useApp();
     const { t } = useTranslation();
     const copyText = useCopyText();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
-    useEffect(() => {
-        try {
-            const stored = window.localStorage.getItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
-            if (!stored) return;
-            const parsed = JSON.parse(stored) as unknown;
-            const config = readImageQuickToolsConfig(parsed);
-            setQuickImageToolIds(config.ids);
-            setShowImageToolLabels(config.showLabels);
-        } catch {
-            window.localStorage.removeItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
-        }
-    }, []);
-
-    useEffect(() => {
-        setImageToolSettingsOpen(false);
-    }, [node?.id]);
-
     if (!node) return null;
 
-    const activeNode = node;
     const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
     const top = viewport.y + node.position.y * viewport.k - 14;
     const isResearchFlow = RESEARCH_FLOW_NODE_TYPES.includes(node.type as ResearchFlowNodeType);
@@ -109,14 +82,6 @@ export function CanvasNodeHoverToolbar({
     const hasVideo = isVideo && Boolean(node.metadata?.content);
     const hasAudio = isAudio && Boolean(node.metadata?.content);
     const isText = node.type === CanvasNodeType.Text;
-    const quickImageToolIdSet = new Set(quickImageToolIds);
-
-    function openImageToolSettings() {
-        onKeep(activeNode.id);
-        setDraftImageToolIds(quickImageToolIds);
-        setDraftShowImageToolLabels(showImageToolLabels);
-        setImageToolSettingsOpen(true);
-    }
 
     const baseToolbarTools: ToolbarTool[] = [
         { id: "document", title: t("canvas.nodeToolbar.documentTitle"), label: t("canvas.nodeToolbar.document"), icon: <FileText className="size-4" />, onClick: () => onDocument(node) },
@@ -125,38 +90,20 @@ export function CanvasNodeHoverToolbar({
         { id: "delete", title: t("canvas.nodeToolbar.removeTitle"), label: t("common.delete"), icon: <Trash2 className="size-4" />, onClick: () => onDelete(node), danger: true },
     ];
     const nodeToolbarTools: ToolbarTool[] = [
-        ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: t("common.addToAssets"), label: t("canvas.nodeToolbar.saveAsset"), icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
         ...(hasImage || hasVideo || hasAudio ? [{ id: "download", title: t(hasAudio ? "canvas.nodeToolbar.downloadAudio" : hasVideo ? "canvas.nodeToolbar.downloadVideo" : "canvas.nodeToolbar.downloadImage"), label: t("common.download"), icon: <Download className="size-4" />, onClick: () => onDownload(node) }] : []),
+        ...(hasImage ? [{ id: "view", title: t("canvas.nodeToolbar.viewImage"), label: t("canvas.nodeToolbar.view"), icon: <Maximize2 className="size-4" />, onClick: () => onViewImage(node) }] : []),
+        ...(hasImage ? [{ id: "crop", title: t("canvas.nodeToolbar.crop"), label: t("canvas.nodeToolbar.crop"), icon: <Scissors className="size-4" />, onClick: () => onCrop(node) }] : []),
+        ...(hasImage ? [{ id: "split", title: t("canvas.nodeToolbar.split"), label: t("canvas.nodeToolbar.split"), icon: <Maximize2 className="size-4" />, onClick: () => onSplit(node) }] : []),
+        ...(hasImage ? [{ id: "upscale", title: t("canvas.nodeToolbar.upscale"), label: t("canvas.nodeToolbar.upscale"), icon: <ZoomIn className="size-4" />, onClick: () => onUpscale(node) }] : []),
+        ...(hasImage ? [{ id: "superResolve", title: t("canvas.nodeToolbar.superResolve"), label: t("canvas.nodeToolbar.superResolve"), icon: <Sparkles className="size-4" />, onClick: () => onSuperResolve(node) }] : []),
+        ...(hasImage ? [{ id: "resize", title: t("canvas.nodeToolbar.freeResize"), label: t("canvas.nodeToolbar.freeResize"), icon: <Maximize2 className="size-4" />, onClick: () => onToggleFreeResize(node), active: Boolean(node.metadata?.freeResize) }] : []),
         ...(isText ? [{ id: "decreaseFont", title: t("canvas.nodeToolbar.decreaseFont"), label: t("canvas.nodeToolbar.zoomOut"), icon: <Minus className="size-4" />, onClick: () => onDecreaseFont(node) }] : []),
         ...(isText ? [{ id: "increaseFont", title: t("canvas.nodeToolbar.increaseFont"), label: t("canvas.nodeToolbar.zoomIn"), icon: <Plus className="size-4" />, onClick: () => onIncreaseFont(node) }] : []),
         ...(isImage && !hasImage ? [{ id: "uploadImage", title: t("canvas.nodeToolbar.uploadImage"), label: t("canvas.nodeToolbar.uploadImage"), icon: <Upload className="size-4" />, onClick: () => onUpload(node) }] : []),
         ...(isVideo ? [{ id: "uploadVideo", title: t(hasVideo ? "canvas.nodeToolbar.replaceVideo" : "canvas.nodeToolbar.uploadVideo"), label: t(hasVideo ? "canvas.nodeToolbar.replaceVideo" : "canvas.nodeToolbar.uploadVideo"), icon: <Video className="size-4" />, onClick: () => onUpload(node) }] : []),
         ...(isAudio ? [{ id: "uploadAudio", title: t(hasAudio ? "canvas.nodeToolbar.replaceAudio" : "canvas.nodeToolbar.uploadAudio"), label: t(hasAudio ? "canvas.nodeToolbar.replaceAudio" : "canvas.nodeToolbar.uploadAudio"), icon: <Music2 className="size-4" />, onClick: () => onUpload(node) }] : []),
     ];
-    const toolbarTools = hasImage ? [...baseToolbarTools, ...nodeToolbarTools].filter((tool) => quickImageToolIdSet.has(tool.id as ImageQuickToolId)) : [...baseToolbarTools, ...nodeToolbarTools, ...extraTools];
-    const selectableImageToolbarTools = [...baseToolbarTools, ...nodeToolbarTools].filter((tool) => tool.id !== "retry") as ImageToolbarSettingsTool[];
-
-    const closeImageToolSettings = () => {
-        setImageToolSettingsOpen(false);
-        onLeave();
-    };
-
-    const setDraftImageToolVisible = (id: ImageQuickToolId, visible: boolean) => {
-        setDraftImageToolIds((current) => {
-            const selected = new Set(current);
-            if (visible) selected.add(id);
-            else selected.delete(id);
-            return selectableImageToolbarTools.filter((tool) => selected.has(tool.id)).map((tool) => tool.id);
-        });
-    };
-
-    const saveImageToolSettings = () => {
-        const config = { ids: draftImageToolIds, showLabels: draftShowImageToolLabels };
-        setQuickImageToolIds(config.ids);
-        setShowImageToolLabels(config.showLabels);
-        window.localStorage.setItem(IMAGE_QUICK_TOOLS_STORAGE_KEY, JSON.stringify(config));
-        closeImageToolSettings();
-    };
+    const toolbarTools = hasImage ? [...baseToolbarTools, ...nodeToolbarTools] : [...baseToolbarTools, ...nodeToolbarTools, ...extraTools];
 
     const copyNodeContent = () => {
         const text = researchNodeCopyText(node);
@@ -191,43 +138,18 @@ export function CanvasNodeHoverToolbar({
     }
 
     return (
-        <>
-            <div
-                className={`absolute z-[70] flex -translate-x-1/2 -translate-y-full items-center overflow-visible border ${
-                    isResearchFlow
-                        ? "h-11 rounded-xl text-sm shadow-[0_8px_28px_rgba(0,0,0,.28)]"
-                        : "h-12 rounded-[18px] border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
-                }`}
-                style={
-                    isResearchFlow
-                        ? { left, top, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }
-                        : { left, top }
-                }
-                onMouseEnter={() => onKeep(node.id)}
-                onMouseLeave={() => {
-                    if (!imageToolSettingsOpen) onLeave();
-                }}
-                onMouseDown={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-            >
-                {toolbarTools.map((tool) => (
-                    <ToolbarAction key={tool.id} {...tool} showLabel={isImage ? showImageToolLabels : true} dark={isResearchFlow} />
-                ))}
-                {hasImage ? <ToolbarAction id="more" title={t("canvas.imageTools.configure")} label={t("canvas.imageTools.more")} icon={<Ellipsis className="size-4" />} active={imageToolSettingsOpen} onClick={openImageToolSettings} showLabel={showImageToolLabels} /> : null}
-            </div>
-            {hasImage ? (
-                <ImageToolSettingsModal
-                    open={imageToolSettingsOpen}
-                    tools={selectableImageToolbarTools}
-                    selectedIds={draftImageToolIds}
-                    showLabels={draftShowImageToolLabels}
-                    onToggle={setDraftImageToolVisible}
-                    onShowLabelsChange={setDraftShowImageToolLabels}
-                    onCancel={closeImageToolSettings}
-                    onSave={saveImageToolSettings}
-                />
-            ) : null}
-        </>
+        <div
+            className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+            style={{ left, top }}
+            onMouseEnter={() => onKeep(node.id)}
+            onMouseLeave={onLeave}
+            onMouseDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+        >
+            {toolbarTools.map((tool) => (
+                <ToolbarAction key={tool.id} {...tool} showLabel={true} dark={false} />
+            ))}
+        </div>
     );
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { App } from "antd";
-import { useParams } from "react-router-dom";
+import { useMatch } from "react-router-dom";
 
 import { hostedAgentApi } from "@/services/api/hosted-agent";
 import { hostedAgentConfigured } from "@/services/api/supabase";
@@ -14,7 +14,8 @@ const publishedRevisions = new Map<string, number>();
 
 export function useHostedAgentProject() {
     const { message } = App.useApp();
-    const { id = "" } = useParams<{ id: string }>();
+    // AgentPanel 挂在 UserLayout（无路径父路由）里，useParams 取不到子路由的 :id，必须直接匹配 location
+    const id = useMatch("/canvas/:id")?.params.id || "";
     const [bindingAttempt, setBindingAttempt] = useState(0);
     const [binding, setBinding] = useState(false);
     const [canvasHydrated, setCanvasHydrated] = useState(false);

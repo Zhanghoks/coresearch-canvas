@@ -1,4 +1,4 @@
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 
@@ -26,6 +26,17 @@ export function AgentPanel() {
     const user = useUserStore((state) => state.user);
     const hostedScope = useHostedAgentProject();
     const useHosted = hostedAgentConfigured && Boolean(user);
+    const projectId = hostedScope.project?.id || "";
+    const lastProjectIdRef = useRef(projectId);
+
+    // 本地 Agent 的会话存在本机守护进程里、没有项目维度，切项目时至少不要把上一个项目的消息留在屏幕上。
+    useEffect(() => {
+        const previous = lastProjectIdRef.current;
+        lastProjectIdRef.current = projectId;
+        if (useHosted || !projectId || previous === projectId) return;
+        setAgentState({ messages: [], tokenUsage: null, activeThreadId: "", activeTurnId: "" });
+    }, [projectId, setAgentState, useHosted]);
+
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
         const startX = event.clientX;
@@ -66,7 +77,7 @@ export function AgentPanel() {
             >
                 <button type="button" className="absolute inset-y-0 left-0 z-40 w-4 -translate-x-1/2 cursor-col-resize" onPointerDown={startResize} aria-label={t("agent.panel.resize")} />
                 <div className="flex min-h-0 flex-1 flex-col">
-                    {useHosted ? <HostedAgentPanel scope={hostedScope} /> : <LocalAgentPanel embedded />}
+                    {useHosted ? <HostedAgentPanel key={hostedScope.project?.id || "unbound"} scope={hostedScope} /> : <LocalAgentPanel embedded />}
                 </div>
             </motion.aside>
         </motion.div>

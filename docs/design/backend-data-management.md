@@ -1,6 +1,8 @@
 # CoResearch 后端数据管理设计
 
-> 状态：目标架构设计；本仓库当前尚未完成 Research DB、对象存储、Project membership 或 Canvas projection 迁移。
+> 状态：目标架构设计。托管后端（`agent-api` + Supabase Postgres）已按本文建表：Research Entity 与 revision、Canvas projection、Research Wiki、Idea Anchor、Artifact 与对象存储索引见 `agent-api/supabase/migrations/004`–`008`，隔离由 owner RLS 强制。
+>
+> 尚未完成：前端仍以 `canvas_workspaces.snapshot` blob 发布画布，未切到 projection 表；对象存储只建了 bucket 与 policy，上传链路未接；session 正文仍在 `conversations.session_entries`。Project membership 不做——本产品定位是每人独立账户，不做项目共享，`project_members` 不会实现。
 >
 > 相关实现规格：[Project、Workspace 与 Artifact](./project-workspace-and-artifacts.md)、[托管 Codex Runtime](./hosted-codex-runtime.md)、[Research Flow](./research-flow.md)。
 
@@ -59,20 +61,21 @@ Project                         # 权限与隔离边界
         └── Output
 ```
 
-Project 不再按 `userId` 作为权威目录归属。用户通过 membership 访问 Project：
+Project 不再按 `userId` 作为权威目录归属：
 
 ```text
 projects/<projectId>/
-project_members(project_id, user_id, role)
 ```
 
-`userId` 来自 JWT，只用于身份和 membership 校验；不能决定 Project 的权威数据路径。
+`userId` 来自 JWT，只用于身份和 ownership 校验；不能决定 Project 的权威数据路径。
+
+本产品不做项目共享，因此 membership 就是 `projects.owner_user_id = auth.uid()`，不引入 `project_members`。RLS policy 一律按该条件写。
 
 ## 3. 三类存储及权威性
 
 | 存储层 | 内容 | 权威性 |
 |---|---|---|
-| PostgreSQL / Research DB | Project、membership、Research Entity、关系、Revision、Group、Wiki metadata、Idea Anchor、状态 | 研究对象和关系的真值 |
+| Supabase PostgreSQL / Research DB | Project、ownership、Research Entity、关系、Revision、Group、Wiki metadata、Idea Anchor、状态 | 研究对象和关系的真值 |
 | Object Storage | PDF、解析全文、图片、附件、Artifact 正文、编译 PDF | 大文件内容的真值 |
 | Project Workspace | `AGENTS.md`、Skills、论文源码、临时文件、脚本产物 | Agent 工作区，不是研究知识真值 |
 
@@ -367,7 +370,7 @@ Artifact 仍然是 Project-scoped、immutable、带来源的派生产物；Paper
 | 当前实现 | 目标架构 |
 |---|---|
 | `.coresearch/` 全机共享 Agent cwd | 每个 Project 独立 `workspace/` |
-| `.data/users/<userId>/projects/<hash>/` | `<hostDataRoot>/projects/<projectId>/` |
+| 本地 `canvas-agent` 的 `.data/users/<userId>/projects/<hash>/` | `<hostDataRoot>/projects/<projectId>/`（托管侧 `agent-api` 已切换，本地 `canvas-agent` 仍是旧布局） |
 | `canvas.json` / 浏览器本地 Canvas 数据 | Research DB + Canvas projection |
 | `canvas-agent` 文件型 Project store | Project-scoped DB / object storage service |
 | `literature-wiki/` Markdown / JSONL | Research DB + source materialization |
@@ -392,9 +395,8 @@ Artifact 仍然是 Project-scoped、immutable、带来源的派生产物；Paper
 
 - 一 Project 一 container / VM 的隔离方案
 - timeout、idle recycle、并发上限、token TTL 和 body size
-- Postgres migration、RLS policy 和 `project_members` 的具体 SQL
-- Research DB 的 ORM、事件总线和索引实现
-- Object Storage 厂商与 PDF 解析实现
+- Research DB 的事件总线与查询优化索引
+- PDF 解析实现
 - Research Wiki 的 embedding、全文检索和增量索引方案
 
 这些边界需要独立的实现规格和验证证据，不能由本数据模型文档隐式决定。

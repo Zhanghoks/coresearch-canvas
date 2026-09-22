@@ -1,5 +1,10 @@
 # CHANGELOG
 
++ [新增] 生产部署改为 Vercel 前端加 Cloudflare Tunnel 后的单副本 Pi Agent API，并附上生产 Compose、环境样例和镜像构建。
+
++ [新增] 托管后端补齐多用户研究数据存储：Research Entity 与 revision、画布结构化投影、文献 Wiki、Idea Anchor、Artifact 与对象存储索引全部落 Supabase Postgres，并按项目所有者做行级隔离。
++ [调整] 托管 Agent 运行目录改以 projectId 作为隔离 key，不再按 userId 分目录。
+
 + [调整] 对齐 Idea Formation 分步设计文档与当前 Research Flow，统一 Deep Dive、Research Question、Evaluation-first、Method Exploration、Research Design 和可替换 Idea Section 语义。
 
 + [新增] 增加 Research Entity Node / Group / Section 目标模型，并在 Agent Skill 中标明实体、分组、Section 与当前 runtime 的实现边界。

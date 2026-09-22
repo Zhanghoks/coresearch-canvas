@@ -30,14 +30,15 @@ test("运行时 token 只能用密钥解开，篡改或跨 Project 字段缺失�
 });
 
 test("Project 运行目录把 workspace 和 codex-home 分开，路径 key 不是权限", () => {
-    const paths = projectRuntimePaths("/srv/runtime", { userId: "alice", projectId: "project-a" });
+    const paths = projectRuntimePaths("/srv/runtime", { projectId: "project-a" });
     assert.equal(sanitizeUserId("alice"), "alice");
     assert.equal(projectKey("project-a").length, 24);
-    assert.equal(paths.workspace, path.join("/srv/runtime", "users", "alice", "projects", projectKey("project-a"), "workspace"));
-    assert.equal(paths.codexHome, path.join("/srv/runtime", "users", "alice", "projects", projectKey("project-a"), "codex-home"));
+    assert.equal(paths.workspace, path.join("/srv/runtime", "projects", projectKey("project-a"), "workspace"));
+    assert.equal(paths.codexHome, path.join("/srv/runtime", "projects", projectKey("project-a"), "codex-home"));
     assert.notEqual(paths.workspace, paths.codexHome);
-    assert.notEqual(projectRuntimePaths("/srv/runtime", { userId: "alice", projectId: "project-b" }).codexHome, paths.codexHome);
-    assert.notEqual(projectRuntimePaths("/srv/runtime", { userId: "bob", projectId: "project-a" }).workspace, paths.workspace);
+    assert.notEqual(projectRuntimePaths("/srv/runtime", { projectId: "project-b" }).codexHome, paths.codexHome);
+    // userId 不参与路径推导：隔离 key 只有 projectId。
+    assert.ok(!paths.root.includes("alice"));
 });
 
 test("Conversation 绑定 Codex thread，画布 snapshot 随 revision 持久化，跨 Project 读不到", async () => {

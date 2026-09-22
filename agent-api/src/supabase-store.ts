@@ -2,7 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { AppError } from "./errors.js";
 import type { ResearchStore } from "./store.js";
-import { PI_SESSION_STORAGE_VERSION, type AgentRunStatus, type ConversationSession, type JsonObject, type NewRuntimeEvent, type RequestContext } from "./types.js";
+import { PI_SESSION_STORAGE_VERSION, type AgentRunStatus, type CanvasEdgeProjection, type CanvasNodeProjection, type CanvasProjection, type CanvasProjectionInput, type CanvasViewportProjection, type ConversationSession, type JsonObject, type NewRuntimeEvent, type RequestContext, type ResearchEntityType, type ResearchRevisionInput, type ResearchRevisionStatus } from "./types.js";
+
+const ENTITY_COLUMNS = "id,project_id,type,head_revision_id,created_by,created_at,updated_at,archived_at";
+const REVISION_COLUMNS = "id,entity_id,project_id,revision,title,summary,document,attributes,status,created_by,created_at";
+const RELATION_COLUMNS = "id,project_id,source_entity_id,target_entity_id,relation_type,created_at";
+// research_entity_revisions 对 research_entities 有两条 FK（entity_id 与 head_revision_id），必须点名约束。
+const HEAD_COLUMNS = `head:research_entity_revisions!research_entities_head_revision_fkey(${REVISION_COLUMNS})`;
 
 export class SupabaseResearchStore implements ResearchStore {
     constructor(private readonly client: SupabaseClient) {}
@@ -43,6 +49,110 @@ export class SupabaseResearchStore implements ResearchStore {
         const value = first(data);
         if (!value) throw new AppError("找不到画布工作区", 404, "canvas_not_found");
         return canvas(row(value));
+    }
+
+    async readCanvasProjection(ctx: RequestContext): Promise<CanvasProjection> {
+        const workspace = await this.readCanvas(ctx);
+        const [nodes, edges, viewport, entities] = await Promise.all([
+            this.select("canvas_nodes", "client_node_id,type,entity_id,x,y,width,height,group_client_id,display_state", ctx.canvasWorkspaceId),
+            this.select("canvas_edges", "client_edge_id,relation_type,source:canvas_nodes!canvas_edges_source_node_id_fkey(client_node_id),target:canvas_nodes!canvas_edges_target_node_id_fkey(client_node_id)", ctx.canvasWorkspaceId),
+            this.select("canvas_viewport", "x,y,k,background_mode,show_image_info", ctx.canvasWorkspaceId),
+            this.listEntities(ctx),
+        ]);
+        return {
+            canvasId: workspace.id,
+            projectId: workspace.projectId,
+            revision: workspace.revision,
+            nodes: nodes.map((value) => canvasNode(row(value))),
+            edges: edges.map((value) => canvasEdge(row(value))),
+            viewport: viewport[0] ? canvasViewport(row(viewport[0])) : null,
+            entities,
+        };
+    }
+
+    async saveCanvasProjection(ctx: RequestContext, revision: number, projection: CanvasProjectionInput) {
+        const data = await this.rpc("save_canvas_projection", {
+            target_project_id: ctx.projectId,
+            target_revision: revision,
+            next_nodes: projection.nodes.map(nodePayload),
+            next_edges: projection.edges.map(edgePayload),
+            next_viewport: projection.viewport ? viewportPayload(projection.viewport) : null,
+        });
+        const value = first(data);
+        if (!value) throw new AppError("找不到画布工作区", 404, "canvas_not_found");
+        return canvas(row(value));
+    }
+
+    async listEntities(ctx: RequestContext) {
+        const { data, error } = await this.client.from("research_entities").select(`${ENTITY_COLUMNS},${HEAD_COLUMNS}`).eq("project_id", ctx.projectId).is("archived_at", null).order("created_at", { ascending: true });
+        if (error) throw databaseError(error);
+        return (data || []).map((value) => researchEntityDetail(row(value)));
+    }
+
+    async readEntity(ctx: RequestContext, entityId: string) {
+        const { data, error } = await this.client.from("research_entities").select(`${ENTITY_COLUMNS},${HEAD_COLUMNS}`).eq("id", entityId).eq("project_id", ctx.projectId).maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("找不到研究对象", 404, "entity_not_found");
+        return researchEntityDetail(row(data));
+    }
+
+    async createEntity(ctx: RequestContext, type: ResearchEntityType, input: ResearchRevisionInput) {
+        const data = await this.rpc("create_research_entity", { target_project_id: ctx.projectId, entity_type: type, ...revisionArgs(input) });
+        const value = first(data);
+        if (!value) throw new AppError("创建研究对象失败", 500, "entity_create_failed");
+        return await this.readEntity(ctx, string(row(value).id));
+    }
+
+    async appendEntityRevision(ctx: RequestContext, entityId: string, input: ResearchRevisionInput) {
+        await this.readEntity(ctx, entityId);
+        const data = await this.rpc("append_research_entity_revision", { target_project_id: ctx.projectId, target_entity_id: entityId, ...revisionArgs(input) });
+        const value = first(data);
+        if (!value) throw new AppError("创建 revision 失败", 500, "revision_create_failed");
+        return researchRevision(row(value));
+    }
+
+    async listEntityRevisions(ctx: RequestContext, entityId: string) {
+        await this.readEntity(ctx, entityId);
+        const { data, error } = await this.client.from("research_entity_revisions").select(REVISION_COLUMNS).eq("entity_id", entityId).eq("project_id", ctx.projectId).order("revision", { ascending: true });
+        if (error) throw databaseError(error);
+        return (data || []).map((value) => researchRevision(row(value)));
+    }
+
+    async archiveEntity(ctx: RequestContext, entityId: string) {
+        const { data, error } = await this.client.from("research_entities").update({ archived_at: new Date().toISOString() }).eq("id", entityId).eq("project_id", ctx.projectId).select(ENTITY_COLUMNS).maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("找不到研究对象", 404, "entity_not_found");
+        return researchEntity(row(data));
+    }
+
+    async listRelations(ctx: RequestContext) {
+        const { data, error } = await this.client.from("research_relations").select(RELATION_COLUMNS).eq("project_id", ctx.projectId).order("created_at", { ascending: true });
+        if (error) throw databaseError(error);
+        return (data || []).map((value) => researchRelation(row(value)));
+    }
+
+    async createRelation(ctx: RequestContext, input: { sourceEntityId: string; targetEntityId: string; relationType: string }) {
+        const { data, error } = await this.client.from("research_relations").insert({
+            project_id: ctx.projectId,
+            source_entity_id: input.sourceEntityId,
+            target_entity_id: input.targetEntityId,
+            relation_type: input.relationType,
+            created_by: ctx.userId,
+        }).select(RELATION_COLUMNS).single();
+        if (error) throw databaseError(error);
+        return researchRelation(row(data));
+    }
+
+    async deleteRelation(ctx: RequestContext, relationId: string) {
+        const { data, error } = await this.client.from("research_relations").delete().eq("id", relationId).eq("project_id", ctx.projectId).select("id").maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("找不到研究关系", 404, "relation_not_found");
+    }
+
+    private async select(table: string, columns: string, canvasWorkspaceId: string) {
+        const { data, error } = await this.client.from(table).select(columns).eq("canvas_id", canvasWorkspaceId);
+        if (error) throw databaseError(error);
+        return (data || []) as unknown[];
     }
 
     async createConversation(ctx: RequestContext, title: string) {
@@ -228,6 +338,121 @@ function runtimeEvent(value: Record<string, unknown>) {
         itemId: string(value.item_id),
         payload: row(value.payload),
         createdAt: string(value.created_at),
+    };
+}
+
+function researchEntity(value: Record<string, unknown>) {
+    return {
+        id: string(value.id),
+        projectId: string(value.project_id),
+        type: string(value.type) as ResearchEntityType,
+        headRevisionId: value.head_revision_id ? string(value.head_revision_id) : null,
+        createdBy: string(value.created_by),
+        createdAt: string(value.created_at),
+        updatedAt: string(value.updated_at),
+        archivedAt: value.archived_at ? string(value.archived_at) : null,
+    };
+}
+
+function researchEntityDetail(value: Record<string, unknown>) {
+    const head = first(value.head);
+    return { ...researchEntity(value), head: isRow(head) ? researchRevision(head) : null };
+}
+
+function researchRevision(value: Record<string, unknown>) {
+    return {
+        id: string(value.id),
+        entityId: string(value.entity_id),
+        projectId: string(value.project_id),
+        revision: number(value.revision),
+        title: string(value.title),
+        summary: string(value.summary),
+        document: string(value.document),
+        attributes: row(value.attributes),
+        status: string(value.status) as ResearchRevisionStatus,
+        createdBy: string(value.created_by),
+        createdAt: string(value.created_at),
+    };
+}
+
+function researchRelation(value: Record<string, unknown>) {
+    return {
+        id: string(value.id),
+        projectId: string(value.project_id),
+        sourceEntityId: string(value.source_entity_id),
+        targetEntityId: string(value.target_entity_id),
+        relationType: string(value.relation_type),
+        createdAt: string(value.created_at),
+    };
+}
+
+function canvasNode(value: Record<string, unknown>): CanvasNodeProjection {
+    return {
+        clientNodeId: string(value.client_node_id),
+        type: string(value.type),
+        entityId: value.entity_id ? string(value.entity_id) : null,
+        x: number(value.x),
+        y: number(value.y),
+        width: number(value.width),
+        height: number(value.height),
+        groupClientId: value.group_client_id ? string(value.group_client_id) : null,
+        displayState: row(value.display_state),
+    };
+}
+
+function canvasEdge(value: Record<string, unknown>): CanvasEdgeProjection {
+    return {
+        clientEdgeId: string(value.client_edge_id),
+        sourceClientNodeId: string(row(first(value.source)).client_node_id),
+        targetClientNodeId: string(row(first(value.target)).client_node_id),
+        relationType: value.relation_type ? string(value.relation_type) : null,
+    };
+}
+
+function canvasViewport(value: Record<string, unknown>): CanvasViewportProjection {
+    return {
+        x: number(value.x),
+        y: number(value.y),
+        k: number(value.k),
+        backgroundMode: value.background_mode ? string(value.background_mode) : null,
+        showImageInfo: Boolean(value.show_image_info),
+    };
+}
+
+function nodePayload(node: CanvasNodeProjection) {
+    return {
+        clientNodeId: node.clientNodeId,
+        type: node.type,
+        entityId: node.entityId,
+        x: node.x,
+        y: node.y,
+        width: node.width,
+        height: node.height,
+        groupClientId: node.groupClientId,
+        displayState: node.displayState,
+    };
+}
+
+function edgePayload(edge: CanvasEdgeProjection) {
+    return {
+        clientEdgeId: edge.clientEdgeId,
+        sourceClientNodeId: edge.sourceClientNodeId,
+        targetClientNodeId: edge.targetClientNodeId,
+        relationType: edge.relationType,
+    };
+}
+
+function viewportPayload(viewport: CanvasViewportProjection) {
+    return { x: viewport.x, y: viewport.y, k: viewport.k, backgroundMode: viewport.backgroundMode, showImageInfo: viewport.showImageInfo };
+}
+
+function revisionArgs(input: ResearchRevisionInput) {
+    return {
+        next_title: input.title,
+        next_summary: input.summary,
+        next_document: input.document,
+        next_attributes: input.attributes,
+        next_status: input.status,
     };
 }
 

@@ -3,6 +3,7 @@ out/
 node_modules/
 .env*
 !.env.example
+!.env.production.example
 data/
 .data/
 *.log

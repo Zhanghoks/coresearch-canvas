@@ -1,4 +1,4 @@
-import type { AgentRun, AgentRunStatus, CanvasWorkspace, Conversation, ConversationSession, JsonObject, NewRuntimeEvent, Project, ProjectSkill, RequestContext, RuntimeEvent } from "./types.js";
+import type { AgentRun, AgentRunStatus, CanvasProjection, CanvasProjectionInput, CanvasWorkspace, Conversation, ConversationSession, JsonObject, NewRuntimeEvent, Project, ProjectSkill, RequestContext, ResearchEntity, ResearchEntityDetail, ResearchEntityRevision, ResearchEntityType, ResearchRelation, ResearchRevisionInput, RuntimeEvent } from "./types.js";
 
 export interface ResearchStore {
     createProject(userId: string, name: string): Promise<Project>;
@@ -7,6 +7,20 @@ export interface ResearchStore {
     deleteProject(userId: string, projectId: string): Promise<void>;
     readCanvas(ctx: RequestContext): Promise<CanvasWorkspace>;
     saveCanvasState(ctx: RequestContext, revision: number, snapshot: JsonObject): Promise<CanvasWorkspace>;
+
+    readCanvasProjection(ctx: RequestContext): Promise<CanvasProjection>;
+    saveCanvasProjection(ctx: RequestContext, revision: number, projection: CanvasProjectionInput): Promise<CanvasWorkspace>;
+
+    listEntities(ctx: RequestContext): Promise<ResearchEntityDetail[]>;
+    readEntity(ctx: RequestContext, entityId: string): Promise<ResearchEntityDetail>;
+    createEntity(ctx: RequestContext, type: ResearchEntityType, input: ResearchRevisionInput): Promise<ResearchEntityDetail>;
+    appendEntityRevision(ctx: RequestContext, entityId: string, input: ResearchRevisionInput): Promise<ResearchEntityRevision>;
+    listEntityRevisions(ctx: RequestContext, entityId: string): Promise<ResearchEntityRevision[]>;
+    archiveEntity(ctx: RequestContext, entityId: string): Promise<ResearchEntity>;
+
+    listRelations(ctx: RequestContext): Promise<ResearchRelation[]>;
+    createRelation(ctx: RequestContext, input: { sourceEntityId: string; targetEntityId: string; relationType: string }): Promise<ResearchRelation>;
+    deleteRelation(ctx: RequestContext, relationId: string): Promise<void>;
 
     createConversation(ctx: RequestContext, title: string): Promise<Conversation>;
     listConversations(ctx: RequestContext): Promise<Conversation[]>;

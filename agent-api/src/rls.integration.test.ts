@@ -56,6 +56,51 @@ test("Supabase RLS isolates users and projects", { skip: !enabled }, async () =>
         const { data: bobSkills, error: bobSkillError } = await bobDb.from("project_skills").select("id").eq("project_id", projectA.id);
         assert.ifError(bobSkillError);
         assert.deepEqual(bobSkills, []);
+
+        // Research Entity / revision：Bob 拿着真实 id 也读不到、改不动。
+        const seed = await createEntity(aliceDb, projectA.id, "seed", "Alice Seed");
+        const { data: bobEntities, error: bobEntityError } = await bobDb.from("research_entities").select("id").eq("id", seed.id);
+        assert.ifError(bobEntityError);
+        assert.deepEqual(bobEntities, []);
+        const { data: bobRevisions, error: bobRevisionError } = await bobDb.from("research_entity_revisions").select("id").eq("entity_id", seed.id);
+        assert.ifError(bobRevisionError);
+        assert.deepEqual(bobRevisions, []);
+        const { data: bobArchived, error: bobArchiveError } = await bobDb.from("research_entities").update({ archived_at: new Date().toISOString() }).eq("id", seed.id).select("id");
+        assert.ifError(bobArchiveError);
+        assert.deepEqual(bobArchived, [], "Bob 不能归档 Alice 的研究对象");
+        const { error: forgedEntityError } = await bobDb.from("research_entities").insert({ project_id: projectA.id, type: "seed", created_by: bob.id });
+        assert.ok(forgedEntityError, "Bob 不能往 Alice 的 Project 插入研究对象");
+
+        // Revision 正文不可改写：只有 status 列被 grant。
+        const { error: revisionRewriteError } = await aliceDb.from("research_entity_revisions").update({ document: "rewritten" }).eq("entity_id", seed.id);
+        assert.ok(revisionRewriteError, "revision 正文不能原地改写，修订必须追加新 revision");
+
+        // Canvas projection：跨 Project 与跨用户都拿不到行。
+        const { error: projectionError } = await aliceDb.rpc("save_canvas_projection", {
+            target_project_id: projectA.id,
+            target_revision: 1,
+            next_nodes: [{ clientNodeId: "seed-1-a", type: "seed", entityId: seed.id, x: 1, y: 2, width: 280, height: 420, displayState: {} }],
+            next_edges: [],
+            next_viewport: { x: 0, y: 0, k: 1, showImageInfo: false },
+        });
+        assert.ifError(projectionError);
+        const { data: aliceNodes, error: aliceNodeError } = await aliceDb.from("canvas_nodes").select("client_node_id").eq("project_id", projectA.id);
+        assert.ifError(aliceNodeError);
+        assert.deepEqual(aliceNodes, [{ client_node_id: "seed-1-a" }]);
+        const { data: bobNodes, error: bobNodeError } = await bobDb.from("canvas_nodes").select("id").eq("project_id", projectA.id);
+        assert.ifError(bobNodeError);
+        assert.deepEqual(bobNodes, []);
+        const { data: bobProjection, error: bobProjectionError } = await bobDb.rpc("save_canvas_projection", {
+            target_project_id: projectA.id,
+            target_revision: 99,
+            next_nodes: [],
+            next_edges: [],
+            next_viewport: null,
+        });
+        assert.ifError(bobProjectionError);
+        assert.deepEqual(bobProjection, [], "Bob 调同一个 RPC 也命中不到 Alice 的画布");
+        const { data: stillThere } = await aliceDb.from("canvas_nodes").select("client_node_id").eq("project_id", projectA.id);
+        assert.deepEqual(stillThere, [{ client_node_id: "seed-1-a" }], "Bob 的调用没有删掉 Alice 的节点");
     } finally {
         for (const user of users) await admin.auth.admin.deleteUser(user.id);
     }
@@ -88,6 +133,21 @@ async function createProject(database: SupabaseClient, name: string) {
     assert.ifError(error);
     assert.ok(Array.isArray(data) && data.length === 1);
     return data[0] as { id: string; canvas_workspace_id: string };
+}
+
+async function createEntity(database: SupabaseClient, projectId: string, type: string, title: string) {
+    const { data, error } = await database.rpc("create_research_entity", {
+        target_project_id: projectId,
+        entity_type: type,
+        next_title: title,
+        next_summary: "",
+        next_document: "",
+        next_attributes: {},
+        next_status: "draft",
+    });
+    assert.ifError(error);
+    assert.ok(Array.isArray(data) && data.length === 1);
+    return data[0] as { id: string };
 }
 
 function required(name: string) {

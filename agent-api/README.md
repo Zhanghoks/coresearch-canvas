@@ -65,6 +65,8 @@ VITE_AGENT_API_URL
 - 事件流使用 `fetch` 和 `Authorization` header，JWT 不进入 URL。
 - 运行失败事件只返回产品级通用文案，不持久化 provider 原始错误内容。
 
+生产 Compose、Tunnel 和 Vercel 变量见仓库根目录 `docker-compose.prod.yml`、`deploy/cloudflared/config.yml`、`deploy/vercel.env.example`，说明在 `docs/content/docs/overview/hosted.zh-CN.mdx`。
+
 ## 当前部署边界
 
 Conversation session 和事件已持久化到 Postgres，可以跨实例恢复。运行中的 abort controller、在线 Canvas 快照和待确认工具调用仍在单个 Agent API 进程内；横向扩容前需要为这些瞬时状态增加粘性路由或共享事件代理。当前实现遇到运行不在本实例时会明确返回冲突，不会把 abort 或工具结果误投到其他 Project。

@@ -6,6 +6,7 @@
 - [Features](/docs/overview/features)
 - [Deploy on Render](/docs/overview/render)
 - [Docker Deployment](/docs/overview/docker)
+- [Hosted deployment](/docs/overview/hosted)
 
 ## Canvas Guide
 

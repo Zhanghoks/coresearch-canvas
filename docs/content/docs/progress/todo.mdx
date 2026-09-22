@@ -7,7 +7,7 @@ description: Planned follow-up work
 
 - Bind user confirmation to an immutable node content version, add semantic relation review, and expose node-linked run progress. Stage transitions, candidate adoption, Method/Evaluation co-design, and Idea dependencies are now enforced locally, but the browser-local canvas still has no versioned Research Domain backend.
 
-- Run the hosted Pi Agent migration against a real Supabase project and platform model account, verify RLS and the full Browser → Agent API → Pi → Tool → Canvas → Browser path. Hosted Codex Runtime is now the target long-term adapter; keep Pi until that path is verified, then decide whether to retire it.
+- Hosted Pi Agent schema `001`–`008` is applied on the CoResearch Supabase project. Still verify RLS (`RUN_SUPABASE_RLS_TESTS=1`) and the Browser → Agent API → Pi → Tool → Canvas → Browser path against a platform model account, then finish Auth redirect URLs, Tunnel, and Vercel. Hosted Codex Runtime stays the long-term adapter; keep Pi until that path is verified.
 - Hosted Codex Runtime: apply `002_codex_runtime.sql`, set `AGENT_RUNTIME=codex` with platform Codex credentials, and verify Browser → agent-api → project-scoped Codex app-server → MCP → Canvas confirm. See `docs/design/hosted-codex-runtime.md`. Idle recycle, max processes, and turn timeouts are still unset.
 - Add sticky routing or a shared event broker for in-flight abort controllers, online Canvas snapshots, and pending tool confirmations before horizontally scaling the hosted Agent API.
 - Replace the Claude Code CLI adapter with a Claude Agent SDK adapter and improve the tool queue, following the [Local Agent Integration Plan](/docs/progress/local-agent-integration-plan).

@@ -1,0 +1,32 @@
+# 生产：agent-api 只监听回环，公网入口走 Cloudflare Tunnel。
+# 备用前端 app 同样只绑回环；主站走 Vercel，不要把 3000 指到 coresearch 主域。
+services:
+  agent-api:
+    image: ghcr.io/zhanghoks/coresearch-agent-api:latest
+    build:
+      context: ./agent-api
+    env_file:
+      - ./agent-api/.env
+    ports:
+      - "127.0.0.1:4100:4100"
+    volumes:
+      - pi-agent-data:/var/lib/research-canvas/pi
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/zhanghoks/coresearch:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY}
+      AGENT_API_URL: ${AGENT_API_URL:-https://api.coresearch.xxx.com}
+    depends_on:
+      - agent-api
+    restart: unless-stopped
+
+volumes:
+  pi-agent-data:

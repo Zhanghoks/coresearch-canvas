@@ -1,0 +1,12 @@
+# cloudflared tunnel --config deploy/cloudflared/config.yml run
+# 把 <TUNNEL_ID> 和域名换成 Cloudflare Zero Trust 里创建的 Tunnel。
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: api.coresearch.xxx.com
+    service: http://127.0.0.1:4100
+  # 备用前端。主站 coresearch.xxx.com 走 Vercel，不要写进这里。
+  - hostname: app-internal.coresearch.xxx.com
+    service: http://127.0.0.1:3000
+  - service: http_status:404

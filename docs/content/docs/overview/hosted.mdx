@@ -1,0 +1,180 @@
+---
+title: Hosted deployment
+description: Run the Pi Agent API on your server, serve the web app from Vercel, and publish the API through a Cloudflare Tunnel
+---
+
+# Hosted deployment
+
+Production has two public entries. The browser talks to the web app and `agent-api` only. It never connects to Pi directly.
+
+| Hostname | Target |
+| --- | --- |
+| `coresearch.xxx.com` | `web/` on Vercel |
+| `api.coresearch.xxx.com` | Cloudflare Tunnel → `127.0.0.1:4100` on your server |
+
+[`docker-compose.prod.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/docker-compose.prod.yml) runs two containers:
+
+- `agent-api` validates Supabase JWTs, runs Pi, and writes Postgres. It listens on loopback port 4100.
+- `app` is a backup static frontend on loopback port 3000. Do not point the primary hostname at it.
+
+Pi sessions, in-flight tool confirmations, and SSE live in that one `agent-api` process. Run a single replica. Do not start a second one until sticky routing exists.
+
+Sign-in, Projects, Conversations, and Agent events live in Supabase. Canvas projects and generation history stay in the browser. This is not full cloud sync.
+
+Replace `coresearch.xxx.com` with your domain. Use a Linux server with Docker Compose v2, and leave disk for Pi sessions and the `pi-agent-data` volume.
+
+## 1. Supabase
+
+In the SQL Editor, run `agent-api/supabase/migrations/` from `001` through `008` in filename order. Skip files that have already been applied.
+
+Authentication → URL Configuration:
+
+- Site URL: `https://coresearch.xxx.com`
+- Redirect URLs: the production origin, any Vercel Preview origin that must sign in, and the backup web origin if you enable it
+
+From Dashboard → API, keep three values. The secret key stays on the server:
+
+- Project URL
+- Publishable key
+- Secret key (`service_role`). Do not prefix it with `VITE_` and do not put it in Vercel.
+
+## 2. Agent API on the server
+
+Install Docker and the Compose plugin, then clone the repo:
+
+```bash
+git clone git@github.com:Zhanghoks/Research-canvas.git
+cd Research-canvas
+cp agent-api/.env.production.example agent-api/.env
+```
+
+Edit `agent-api/.env`:
+
+| Variable | Value |
+| --- | --- |
+| `SUPABASE_URL` | Project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Publishable key |
+| `SUPABASE_SECRET_KEY` | Secret key |
+| `AGENT_API_ORIGINS` | `https://coresearch.xxx.com`. Separate extra origins with commas, without spaces, paths, or a trailing slash |
+| `PI_PROVIDER` / `PI_MODEL` | Platform model |
+| `PI_API_KEY` | Platform model key. This is the only place it belongs |
+| `PI_AGENT_DIR` | `/var/lib/research-canvas/pi` |
+| `PORT` | `4100` |
+
+Leave `AGENT_RUNTIME` unset. The default runtime is Pi.
+
+The backup frontend reads public values from the host shell and writes them into `config.js` at container start. Export them, then build:
+
+```bash
+export SUPABASE_URL=https://your-project.supabase.co
+export SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+export AGENT_API_URL=https://api.coresearch.xxx.com
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+`AGENT_API_URL` must be the public API origin. The browser runs on the user's machine, so `localhost` would point at that machine.
+
+Until GHCR has a `coresearch-agent-api` image, keep `--build`. After a version tag, [Agent API Docker image](https://github.com/Zhanghoks/Research-canvas/blob/main/.github/workflows/agent-api-docker-image.yml) publishes it.
+
+Check the loopback health endpoint, and leave the public ports closed:
+
+```bash
+curl -sS http://127.0.0.1:4100/health
+```
+
+The body is `{"ok":true}`. Do not allow 4100 or 3000 through the firewall.
+
+## 3. Cloudflare Tunnel
+
+Host DNS at Cloudflare. Install `cloudflared` ([install guide](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)), then create the tunnel:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create coresearch
+cloudflared tunnel route dns coresearch api.coresearch.xxx.com
+```
+
+`tunnel create` prints a Tunnel ID and writes `~/.cloudflared/<TUNNEL_ID>.json`. Install that credential and [`deploy/cloudflared/config.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/cloudflared/config.yml):
+
+```bash
+sudo mkdir -p /etc/cloudflared
+sudo cp ~/.cloudflared/<TUNNEL_ID>.json /etc/cloudflared/<TUNNEL_ID>.json
+sudo cp deploy/cloudflared/config.yml /etc/cloudflared/config.yml
+```
+
+Edit `/etc/cloudflared/config.yml`. Replace `<TUNNEL_ID>` and the hostnames. Keep the API route as:
+
+```yaml
+ingress:
+  - hostname: api.coresearch.xxx.com
+    service: http://127.0.0.1:4100
+  - service: http_status:404
+```
+
+To expose the backup frontend, add a separate hostname for `http://127.0.0.1:3000` and run `cloudflared tunnel route dns coresearch app-internal.coresearch.xxx.com`. Do not put `coresearch.xxx.com` on the tunnel. That name belongs to Vercel.
+
+Install the service:
+
+```bash
+sudo cloudflared --config /etc/cloudflared/config.yml service install
+sudo systemctl enable --now cloudflared
+```
+
+From outside the server:
+
+```bash
+curl -sS https://api.coresearch.xxx.com/health
+```
+
+Expect `{"ok":true}`. The server's public IP on port 4100 must not answer.
+
+## 4. Vercel
+
+Import this repository. The root [`vercel.json`](https://github.com/Zhanghoks/Research-canvas/blob/main/vercel.json) builds `web/`. Production variables match [`deploy/vercel.env.example`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/vercel.env.example):
+
+| Variable | Value |
+| --- | --- |
+| `VITE_SUPABASE_URL` | Project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key |
+| `VITE_AGENT_API_URL` | `https://api.coresearch.xxx.com` |
+
+Do not set `SUPABASE_SECRET_KEY` or `PI_API_KEY` on Vercel. These three values are baked in at build time, so redeploy after changing them.
+
+Add `coresearch.xxx.com` in Vercel and create the CNAME Cloudflare shows for that project.
+
+To sign in from a Preview deployment, append that origin to `AGENT_API_ORIGINS`, restart `agent-api`, and add it to Supabase Redirect URLs. The origin must match the browser address bar exactly.
+
+## 5. Invite codes
+
+On a machine that can read `agent-api/.env`:
+
+```bash
+cd agent-api
+npm ci
+npm run invite:create
+```
+
+Do not advertise the built-in `test` account. It exists for protocol checks only.
+
+## 6. Verification
+
+```bash
+cd agent-api
+RUN_SUPABASE_RLS_TESTS=1 npm test
+AGENT_API_URL=https://api.coresearch.xxx.com npm run acceptance:live
+```
+
+Then, in the browser:
+
+- A signed-out visitor sees only the invite gate, and cannot open home, canvas, or Agent.
+- After sign-in, Agent does not ask for a user model key.
+- `PI_API_KEY` never appears in network traffic. SSE sends `Authorization`, and the JWT stays out of the URL.
+
+## Upgrade and backup
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+An upgrade drops open SSE connections. Postgres backups stay with Supabase. Pi session files live in the `pi-agent-data` volume; confirm the volume name with `docker volume ls` before archiving it. Keep the secret key and `PI_API_KEY` out of centralized logs.

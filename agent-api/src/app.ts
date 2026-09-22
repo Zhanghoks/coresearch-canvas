@@ -10,6 +10,7 @@ import { EventHub } from "./event-hub.js";
 import { createInviteAdmin, InviteRateLimiter, registerWithInvite } from "./invite.js";
 import { PiRuntimeAdapter } from "./pi-runtime.js";
 import { ConversationModule, ProjectModule, requiredText } from "./project-module.js";
+import { ResearchModule } from "./research-module.js";
 import type { RuntimeAdapter } from "./runtime.js";
 import { RuntimeManager } from "./runtime-manager.js";
 import { RuntimeTokenService } from "./runtime-token.js";
@@ -84,6 +85,74 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
     }));
     app.put("/v1/projects/:projectId/canvas/state", publishCanvas(canvas));
     app.post("/v1/projects/:projectId/canvas/tool-results/:requestId", completeCanvasTool(canvas));
+
+    app.get("/v1/projects/:projectId/canvas/projection", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.json(await scope.research.readProjection(ctx));
+    }));
+    app.put("/v1/projects/:projectId/canvas/projection", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const revision = nonNegativeInteger(request.body?.revision, "画布 revision 无效");
+        const workspace = await scope.research.saveProjection(ctx, revision, jsonObject(request.body, "画布投影无效"));
+        if (workspace.revision !== revision) throw new AppError("画布投影 revision 已过期", 409, "canvas_revision_conflict");
+        response.json(workspace);
+    }));
+
+    app.get("/v1/projects/:projectId/entities", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.json(await scope.research.listEntities(ctx));
+    }));
+    app.post("/v1/projects/:projectId/entities", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.status(201).json(await scope.research.createEntity(ctx, jsonObject(request.body, "研究对象无效")));
+    }));
+    app.get("/v1/projects/:projectId/entities/:entityId", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.json(await scope.research.readEntity(ctx, request.params.entityId));
+    }));
+    app.delete("/v1/projects/:projectId/entities/:entityId", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        await scope.research.archiveEntity(ctx, request.params.entityId);
+        response.status(204).end();
+    }));
+    app.get("/v1/projects/:projectId/entities/:entityId/revisions", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.json(await scope.research.listRevisions(ctx, request.params.entityId));
+    }));
+    app.post("/v1/projects/:projectId/entities/:entityId/revisions", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.status(201).json(await scope.research.appendRevision(ctx, request.params.entityId, jsonObject(request.body, "revision 无效")));
+    }));
+    app.post("/v1/projects/:projectId/entities/:entityId/confirm", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.status(201).json(await scope.research.confirmEntity(ctx, request.params.entityId, jsonObject(request.body || {}, "确认内容无效")));
+    }));
+
+    app.get("/v1/projects/:projectId/relations", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.json(await scope.research.listRelations(ctx));
+    }));
+    app.post("/v1/projects/:projectId/relations", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        response.status(201).json(await scope.research.createRelation(ctx, jsonObject(request.body, "研究关系无效")));
+    }));
+    app.delete("/v1/projects/:projectId/relations/:relationId", asyncRoute(async (request, response) => {
+        const scope = requestScope(response);
+        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        await scope.research.deleteRelation(ctx, request.params.relationId);
+        response.status(204).end();
+    }));
 
     app.post("/v1/projects/:projectId/conversations", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
@@ -254,7 +323,7 @@ function requestScope(response: Response) {
     const auth = response.locals.auth as AuthenticatedRequest | undefined;
     if (!auth) throw new AppError("登录状态无效", 401, "unauthorized");
     const store = new SupabaseResearchStore(auth.database);
-    return { auth, store, projects: new ProjectModule(store), conversations: new ConversationModule(store) };
+    return { auth, store, projects: new ProjectModule(store), conversations: new ConversationModule(store), research: new ResearchModule(store) };
 }
 
 function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<void>) {

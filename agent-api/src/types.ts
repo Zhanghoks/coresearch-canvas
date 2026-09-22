@@ -97,6 +97,100 @@ export type RunTurnInput = {
     prompt: string;
 };
 
+export const RESEARCH_ENTITY_TYPES = [
+    "seed", "direction", "research_question", "problem", "hypothesis",
+    "approach", "method", "evaluation", "idea",
+] as const;
+
+export type ResearchEntityType = (typeof RESEARCH_ENTITY_TYPES)[number];
+export type ResearchRevisionStatus = "draft" | "confirmed" | "superseded" | "archived";
+
+export type ResearchEntity = {
+    id: string;
+    projectId: string;
+    type: ResearchEntityType;
+    headRevisionId: string | null;
+    createdBy: string;
+    createdAt: string;
+    updatedAt: string;
+    archivedAt: string | null;
+};
+
+export type ResearchEntityRevision = {
+    id: string;
+    entityId: string;
+    projectId: string;
+    revision: number;
+    title: string;
+    summary: string;
+    document: string;
+    attributes: JsonObject;
+    status: ResearchRevisionStatus;
+    createdBy: string;
+    createdAt: string;
+};
+
+/** Entity 加上当前生效的 revision，给列表和投影读取用。 */
+export type ResearchEntityDetail = ResearchEntity & { head: ResearchEntityRevision | null };
+
+export type ResearchRevisionInput = {
+    title: string;
+    summary: string;
+    document: string;
+    attributes: JsonObject;
+    status: ResearchRevisionStatus;
+};
+
+export type ResearchRelation = {
+    id: string;
+    projectId: string;
+    sourceEntityId: string;
+    targetEntityId: string;
+    relationType: string;
+    createdAt: string;
+};
+
+/** 画布节点的客户端 id 不是 uuid，只在画布内唯一，所以投影按客户端 id 对齐。 */
+export type CanvasNodeProjection = {
+    clientNodeId: string;
+    type: string;
+    entityId: string | null;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    groupClientId: string | null;
+    displayState: JsonObject;
+};
+
+export type CanvasEdgeProjection = {
+    clientEdgeId: string;
+    sourceClientNodeId: string;
+    targetClientNodeId: string;
+    relationType: string | null;
+};
+
+export type CanvasViewportProjection = {
+    x: number;
+    y: number;
+    k: number;
+    backgroundMode: string | null;
+    showImageInfo: boolean;
+};
+
+export type CanvasProjectionInput = {
+    nodes: CanvasNodeProjection[];
+    edges: CanvasEdgeProjection[];
+    viewport: CanvasViewportProjection | null;
+};
+
+export type CanvasProjection = CanvasProjectionInput & {
+    canvasId: string;
+    projectId: string;
+    revision: number;
+    entities: ResearchEntityDetail[];
+};
+
 export type ProjectSkill = {
     id: string;
     projectId: string;

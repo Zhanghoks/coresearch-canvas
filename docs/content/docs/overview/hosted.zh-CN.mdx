@@ -1,0 +1,180 @@
+---
+title: 托管部署
+description: 在自有服务器上部署 Pi Agent API，前端走 Vercel，API 走 Cloudflare Tunnel
+---
+
+# 托管部署
+
+生产有两个公网入口。浏览器只打开网页和 `agent-api`，不直连 Pi。
+
+| 域名 | 落点 |
+| --- | --- |
+| `coresearch.xxx.com` | Vercel 上的 `web/` |
+| `api.coresearch.xxx.com` | Cloudflare Tunnel → 服务器 `127.0.0.1:4100` |
+
+服务器上用 [`docker-compose.prod.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/docker-compose.prod.yml) 跑两个容器：
+
+- `agent-api`：校验 Supabase JWT，跑 Pi，写 Postgres。只监听回环 4100。
+- `app`：备用静态前端，只监听回环 3000。主站不要指到这个容器。
+
+Pi 会话、进行中的工具确认和 SSE 都在这一个 `agent-api` 进程里。只跑一个副本。横向扩容前不要起第二个。
+
+登录、Project、Conversation 和 Agent 事件在 Supabase。画布项目库和生成记录仍在浏览器本地，这不是整站云同步。
+
+把下面的 `coresearch.xxx.com` 换成你的域名。建议一台装有 Docker Compose v2 的 Linux 服务器，内存留给 Pi 会话和 `pi-agent-data` 卷。
+
+## 1. Supabase
+
+在 SQL Editor 按文件名顺序执行 `agent-api/supabase/migrations/` 下的 `001` 到 `008`。已经执行过的不要重复跑。
+
+Authentication → URL Configuration：
+
+- Site URL：`https://coresearch.xxx.com`
+- Redirect URLs：生产域；需要登录的 Vercel Preview 域；备用前端域（如果启用）
+
+从 Dashboard → API 记下三项，只把 Secret Key 放在服务器上：
+
+- Project URL
+- Publishable key
+- Secret key（`service_role`，不要以 `VITE_` 开头，不要放进 Vercel）
+
+## 2. 服务器上的 Agent API
+
+安装 Docker 与 Compose 插件后克隆仓库：
+
+```bash
+git clone git@github.com:Zhanghoks/Research-canvas.git
+cd Research-canvas
+cp agent-api/.env.production.example agent-api/.env
+```
+
+编辑 `agent-api/.env`：
+
+| 变量 | 值 |
+| --- | --- |
+| `SUPABASE_URL` | Project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Publishable key |
+| `SUPABASE_SECRET_KEY` | Secret key |
+| `AGENT_API_ORIGINS` | `https://coresearch.xxx.com`。多个来源用逗号分隔，不要空格，不要带路径或结尾斜杠 |
+| `PI_PROVIDER` / `PI_MODEL` | 平台模型 |
+| `PI_API_KEY` | 平台模型钥匙。只放在这里 |
+| `PI_AGENT_DIR` | `/var/lib/research-canvas/pi` |
+| `PORT` | `4100` |
+
+不要设置 `AGENT_RUNTIME`。默认就是 Pi。
+
+备用前端在启动时读取宿主机环境变量，写入容器里的 `config.js`。在同一台 shell 里导出公开值，然后构建启动：
+
+```bash
+export SUPABASE_URL=https://your-project.supabase.co
+export SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+export AGENT_API_URL=https://api.coresearch.xxx.com
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+`AGENT_API_URL` 必须是公网 API 地址。浏览器在用户机器上执行，填 `localhost` 会连到用户自己的电脑。
+
+GHCR 上还没有 `coresearch-agent-api` 镜像时，必须带 `--build`。打版本 tag 后，[Agent API Docker image](https://github.com/Zhanghoks/Research-canvas/blob/main/.github/workflows/agent-api-docker-image.yml) 会发布该镜像。
+
+确认本机健康检查，并确认公网端口没有打开：
+
+```bash
+curl -sS http://127.0.0.1:4100/health
+```
+
+应返回 `{"ok":true}`。防火墙不要放行 4100 和 3000。
+
+## 3. Cloudflare Tunnel
+
+域名的 DNS 放在 Cloudflare。在服务器安装 `cloudflared`（[官方安装说明](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)），然后创建 Tunnel：
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create coresearch
+cloudflared tunnel route dns coresearch api.coresearch.xxx.com
+```
+
+`tunnel create` 会打印 Tunnel ID，并在 `~/.cloudflared/<TUNNEL_ID>.json` 写入凭据。把凭据和仓库里的 [`deploy/cloudflared/config.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/cloudflared/config.yml) 装到系统目录：
+
+```bash
+sudo mkdir -p /etc/cloudflared
+sudo cp ~/.cloudflared/<TUNNEL_ID>.json /etc/cloudflared/<TUNNEL_ID>.json
+sudo cp deploy/cloudflared/config.yml /etc/cloudflared/config.yml
+```
+
+编辑 `/etc/cloudflared/config.yml`：把 `<TUNNEL_ID>` 换成上一步的 ID，把域名换成你的域名。API 这一条保持：
+
+```yaml
+ingress:
+  - hostname: api.coresearch.xxx.com
+    service: http://127.0.0.1:4100
+  - service: http_status:404
+```
+
+备用前端要对公网开放时，再加一条单独子域，指向 `http://127.0.0.1:3000`，并执行 `cloudflared tunnel route dns coresearch app-internal.coresearch.xxx.com`。不要把 `coresearch.xxx.com` 写进 Tunnel，那条域名留给 Vercel。
+
+安装并启动服务：
+
+```bash
+sudo cloudflared --config /etc/cloudflared/config.yml service install
+sudo systemctl enable --now cloudflared
+```
+
+从服务器外面检查：
+
+```bash
+curl -sS https://api.coresearch.xxx.com/health
+```
+
+同样应返回 `{"ok":true}`。用服务器公网 IP 访问 4100 应失败。
+
+## 4. Vercel
+
+在 Vercel 导入本仓库。根目录 [`vercel.json`](https://github.com/Zhanghoks/Research-canvas/blob/main/vercel.json) 会构建 `web/`。Production 环境变量与 [`deploy/vercel.env.example`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/vercel.env.example) 相同：
+
+| 变量 | 值 |
+| --- | --- |
+| `VITE_SUPABASE_URL` | Project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key |
+| `VITE_AGENT_API_URL` | `https://api.coresearch.xxx.com` |
+
+不要在 Vercel 配置 `SUPABASE_SECRET_KEY` 或 `PI_API_KEY`。改环境变量后重新部署，这三个值在构建时写入前端。
+
+把 `coresearch.xxx.com` 加为 Vercel 域名，并在 Cloudflare DNS 按 Vercel 给出的记录做 CNAME。
+
+Preview 部署也要登录时，把该 Preview 来源追加到服务器的 `AGENT_API_ORIGINS`，重启 `agent-api`，并加入 Supabase Redirect URLs。来源必须和浏览器地址栏完全一致。
+
+## 5. 邀请码
+
+在能读到 `agent-api/.env` 的机器上：
+
+```bash
+cd agent-api
+npm ci
+npm run invite:create
+```
+
+产品界面不要展示内置 `test` 账号。该账号只给协议验收用。
+
+## 6. 验收
+
+```bash
+cd agent-api
+RUN_SUPABASE_RLS_TESTS=1 npm test
+AGENT_API_URL=https://api.coresearch.xxx.com npm run acceptance:live
+```
+
+浏览器里再确认：
+
+- 未登录只能看到邀请码门禁，进不了首页、画布和 Agent。
+- 登录后 Agent 不要求用户填写模型 Key。
+- 网络请求里没有 `PI_API_KEY`。SSE 使用 `Authorization` 头，JWT 不出现在 URL 里。
+
+## 升级与备份
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+升级会断开正在进行的 SSE。Postgres 用 Supabase 自己的备份。Pi 会话文件在 volume `pi-agent-data` 里，升级前用 `docker volume ls` 确认卷名再打包。Secret key 和 `PI_API_KEY` 不要写入集中日志。

@@ -22,8 +22,12 @@ export type ProjectRuntimePaths = {
     tmp: string;
 };
 
-export function projectRuntimePaths(runtimeRoot: string, ctx: Pick<RequestContext, "userId" | "projectId">): ProjectRuntimePaths {
-    const root = path.join(runtimeRoot, "users", sanitizeUserId(ctx.userId), "projects", projectKey(ctx.projectId));
+/**
+ * projectId 是隔离 key；userId 只来自 JWT，用于 ownership 校验，不写进权威路径。
+ * 见 docs/design/project-workspace-and-artifacts.md。
+ */
+export function projectRuntimePaths(runtimeRoot: string, ctx: Pick<RequestContext, "projectId">): ProjectRuntimePaths {
+    const root = path.join(runtimeRoot, "projects", projectKey(ctx.projectId));
     return {
         root,
         workspace: path.join(root, "workspace"),

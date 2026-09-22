@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import { AppError } from "./errors.js";
 import type { ResearchStore } from "./store.js";
-import { PI_SESSION_STORAGE_VERSION, type AgentRun, type AgentRunStatus, type CanvasWorkspace, type Conversation, type ConversationSession, type JsonObject, type NewRuntimeEvent, type Project, type ProjectSkill, type RequestContext, type RuntimeEvent } from "./types.js";
+import { PI_SESSION_STORAGE_VERSION, type AgentRun, type AgentRunStatus, type CanvasProjectionInput, type CanvasWorkspace, type Conversation, type ConversationSession, type JsonObject, type NewRuntimeEvent, type Project, type ProjectSkill, type RequestContext, type ResearchEntity, type ResearchEntityRevision, type ResearchEntityType, type ResearchRelation, type ResearchRevisionInput, type RuntimeEvent } from "./types.js";
 
 type ProjectRecord = Project & { canvas: CanvasWorkspace };
 
@@ -13,6 +13,10 @@ export class InMemoryResearchStore implements ResearchStore {
     private readonly runs = new Map<string, AgentRun>();
     private readonly events: RuntimeEvent[] = [];
     private readonly skills = new Map<string, ProjectSkill>();
+    private readonly entities = new Map<string, ResearchEntity>();
+    private readonly revisions: ResearchEntityRevision[] = [];
+    private readonly relations = new Map<string, ResearchRelation>();
+    private readonly projections = new Map<string, CanvasProjectionInput>();
     private eventSequence = 0;
 
     async createProject(userId: string, name: string) {
@@ -36,8 +40,11 @@ export class InMemoryResearchStore implements ResearchStore {
     }
 
     async deleteProject(userId: string, projectId: string) {
-        this.ownedProject(userId, projectId);
+        const project = this.ownedProject(userId, projectId);
         this.projects.delete(projectId);
+        this.projections.delete(project.canvasWorkspaceId);
+        [...this.entities.values()].filter((entity) => entity.projectId === projectId).forEach((entity) => this.entities.delete(entity.id));
+        [...this.relations.values()].filter((relation) => relation.projectId === projectId).forEach((relation) => this.relations.delete(relation.id));
         [...this.conversations.values()].filter((item) => item.projectId === projectId).forEach((item) => {
             this.conversations.delete(item.id);
             this.sessions.delete(item.id);
@@ -55,6 +62,106 @@ export class InMemoryResearchStore implements ResearchStore {
         const project = this.contextProject(ctx);
         if (revision > project.canvas.revision) project.canvas = { ...project.canvas, revision, snapshot: structuredClone(snapshot), updatedAt: new Date().toISOString() };
         return { ...project.canvas, snapshot: project.canvas.snapshot ? structuredClone(project.canvas.snapshot) : null };
+    }
+
+    async readCanvasProjection(ctx: RequestContext) {
+        const project = this.contextProject(ctx);
+        const projection = this.projections.get(ctx.canvasWorkspaceId) || { nodes: [], edges: [], viewport: null };
+        return {
+            canvasId: project.canvas.id,
+            projectId: project.id,
+            revision: project.canvas.revision,
+            ...structuredClone(projection),
+            entities: await this.listEntities(ctx),
+        };
+    }
+
+    async saveCanvasProjection(ctx: RequestContext, revision: number, projection: CanvasProjectionInput) {
+        const project = this.contextProject(ctx);
+        if (revision > project.canvas.revision) {
+            const nodeIds = new Set(projection.nodes.map((node) => node.clientNodeId));
+            // 指向不存在节点的边直接丢弃，与 save_canvas_projection 的 join 语义一致。
+            const edges = projection.edges.filter((edge) => nodeIds.has(edge.sourceClientNodeId) && nodeIds.has(edge.targetClientNodeId));
+            this.projections.set(ctx.canvasWorkspaceId, structuredClone({ ...projection, edges }));
+            project.canvas = { ...project.canvas, revision, updatedAt: new Date().toISOString() };
+        }
+        return { ...project.canvas, snapshot: project.canvas.snapshot ? structuredClone(project.canvas.snapshot) : null };
+    }
+
+    async listEntities(ctx: RequestContext) {
+        this.contextProject(ctx);
+        return [...this.entities.values()]
+            .filter((entity) => entity.projectId === ctx.projectId && !entity.archivedAt)
+            .map((entity) => this.withHead(entity));
+    }
+
+    async readEntity(ctx: RequestContext, entityId: string) {
+        return this.withHead(this.ownedEntity(ctx, entityId));
+    }
+
+    async createEntity(ctx: RequestContext, type: ResearchEntityType, input: ResearchRevisionInput) {
+        this.contextProject(ctx);
+        const now = new Date().toISOString();
+        const entity: ResearchEntity = { id: crypto.randomUUID(), projectId: ctx.projectId, type, headRevisionId: null, createdBy: ctx.userId, createdAt: now, updatedAt: now, archivedAt: null };
+        this.entities.set(entity.id, entity);
+        await this.appendEntityRevision(ctx, entity.id, input);
+        return this.withHead(this.ownedEntity(ctx, entity.id));
+    }
+
+    async appendEntityRevision(ctx: RequestContext, entityId: string, input: ResearchRevisionInput) {
+        const entity = this.ownedEntity(ctx, entityId);
+        const revision: ResearchEntityRevision = {
+            id: crypto.randomUUID(),
+            entityId,
+            projectId: ctx.projectId,
+            revision: this.revisions.filter((item) => item.entityId === entityId).length + 1,
+            ...structuredClone(input),
+            createdBy: ctx.userId,
+            createdAt: new Date().toISOString(),
+        };
+        if (revision.status === "confirmed") {
+            this.revisions.forEach((item, index) => {
+                if (item.entityId === entityId && item.status === "confirmed") this.revisions[index] = { ...item, status: "superseded" };
+            });
+        }
+        this.revisions.push(revision);
+        this.entities.set(entityId, { ...entity, headRevisionId: revision.id, updatedAt: revision.createdAt });
+        return structuredClone(revision);
+    }
+
+    async listEntityRevisions(ctx: RequestContext, entityId: string) {
+        this.ownedEntity(ctx, entityId);
+        return this.revisions.filter((item) => item.entityId === entityId).map((item) => structuredClone(item));
+    }
+
+    async archiveEntity(ctx: RequestContext, entityId: string) {
+        const entity = this.ownedEntity(ctx, entityId);
+        const next = { ...entity, archivedAt: new Date().toISOString() };
+        this.entities.set(entityId, next);
+        return { ...next };
+    }
+
+    async listRelations(ctx: RequestContext) {
+        this.contextProject(ctx);
+        return [...this.relations.values()].filter((item) => item.projectId === ctx.projectId).map((item) => ({ ...item }));
+    }
+
+    async createRelation(ctx: RequestContext, input: { sourceEntityId: string; targetEntityId: string; relationType: string }) {
+        this.ownedEntity(ctx, input.sourceEntityId);
+        this.ownedEntity(ctx, input.targetEntityId);
+        const existing = [...this.relations.values()].find((item) =>
+            item.sourceEntityId === input.sourceEntityId && item.targetEntityId === input.targetEntityId && item.relationType === input.relationType);
+        if (existing) return { ...existing };
+        const relation: ResearchRelation = { id: crypto.randomUUID(), projectId: ctx.projectId, ...input, createdAt: new Date().toISOString() };
+        this.relations.set(relation.id, relation);
+        return { ...relation };
+    }
+
+    async deleteRelation(ctx: RequestContext, relationId: string) {
+        this.contextProject(ctx);
+        const relation = this.relations.get(relationId);
+        if (!relation || relation.projectId !== ctx.projectId) throw new AppError("找不到研究关系", 404, "relation_not_found");
+        this.relations.delete(relationId);
     }
 
     async createConversation(ctx: RequestContext, title: string) {
@@ -180,6 +287,18 @@ export class InMemoryResearchStore implements ResearchStore {
         const project = this.ownedProject(ctx.userId, ctx.projectId);
         if (project.canvasWorkspaceId !== ctx.canvasWorkspaceId) throw new AppError("画布工作区与项目不匹配", 403, "canvas_scope_mismatch");
         return project;
+    }
+
+    private ownedEntity(ctx: RequestContext, entityId: string) {
+        this.contextProject(ctx);
+        const entity = this.entities.get(entityId);
+        if (!entity || entity.projectId !== ctx.projectId) throw new AppError("找不到研究对象", 404, "entity_not_found");
+        return entity;
+    }
+
+    private withHead(entity: ResearchEntity) {
+        const head = this.revisions.find((item) => item.id === entity.headRevisionId);
+        return { ...entity, head: head ? structuredClone(head) : null };
     }
 
     private ownedConversation(ctx: RequestContext, conversationId: string) {

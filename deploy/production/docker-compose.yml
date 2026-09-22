@@ -1,0 +1,101 @@
+# CoResearch 生产 Compose —— 只在服务器 /srv/coresearch/app/ 下运行。
+#
+# 这个文件由 GitHub Actions 每次部署时 scp 覆盖，服务器上不保留源码、不需要 git、不需要 Node。
+# 镜像来自 GHCR，绝不在生产机上构建。
+#
+# 三条硬约束：
+#   1. agent-api 必须单副本。RuntimeManager 的 AbortController、CanvasBridge 的待确认画布工具调用、
+#      EventHub 的 SSE 订阅者全在进程内存里，多副本会让 abort 和画布工具投递到错误的实例。
+#   2. 用 network_mode: host。这台机器的 Docker bridge 没有出站 DNS/egress，Pi provider 调不通。
+#      代价是 ports: 不生效，容器直接监听宿主机 4100；公网入口由 Cloudflare Tunnel 从 127.0.0.1 接。
+#   3. 密钥只来自 /srv/coresearch/env/production.env，不写进本文件、不进镜像、不进 Git。
+
+services:
+  agent-api:
+    image: ghcr.io/zhanghoks/coresearch-agent-api:${IMAGE_TAG:-main}
+    container_name: coresearch-agent-api
+    env_file:
+      - /srv/coresearch/env/production.env
+    network_mode: host
+    volumes:
+      # bind mount 而不是 named volume：数据位置在宿主机上显式可见、可直接 tar 备份，
+      # 且 docker compose down -v 不可能把它删掉。
+      - /srv/coresearch/data/pi:/var/lib/research-canvas/pi
+      # 预留：AGENT_RUNTIME=codex 时的 per-project workspace。当前 pi 运行时不使用。
+      - /srv/coresearch/data/runtime:/srv/coresearch/runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||4100)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: coresearch-cloudflared
+    command: tunnel --config /etc/cloudflared/config.yml run
+    network_mode: host
+    volumes:
+      - /etc/cloudflared:/etc/cloudflared:ro
+    restart: unless-stopped
+    depends_on:
+      - agent-api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── app：备用静态前端（可选，默认不启用）─────────────────────────────────────
+  # 主站走 Vercel。这个容器只是 Vercel 不可用时的兜底入口，通过
+  # deploy/cloudflared/config.yml 里的 app-internal.coresearch.xxx.com 暴露。
+  # 启用方式：COMPOSE_PROFILES=app /srv/coresearch/app/deploy.sh
+  # 没有这个 profile 时它完全不会被创建。注意它只监听回环，不要把主域名指到这里。
+  app:
+    image: ghcr.io/zhanghoks/coresearch:${WEB_IMAGE_TAG:-latest}
+    container_name: coresearch-web
+    profiles: ["app"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # 这三个是浏览器所需的公开值，由 web/docker-entrypoint.sh 写进运行时 config.js。
+      # 不要在这里放 PI_API_KEY 之类的服务端凭据。
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      AGENT_API_URL: ${AGENT_API_URL:-}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── agent-worker（预留，当前不可用）──────────────────────────────────────────
+  # 现在拆不出来，原因是设计事实而非取舍：
+  #   - CanvasBridge（agent-api/src/canvas-bridge.ts）用进程内 Map 保存待确认的画布工具调用，
+  #     靠浏览器 POST /canvas/tool-results/:requestId 来 resolve。跨进程后 canvas_apply_operations
+  #     和 canvas_read_snapshot 直接失效。
+  #   - EventHub（agent-api/src/event-hub.ts）的 SSE 订阅者也在进程内存里。
+  # 要拆必须先有共享事件通道（Redis pub/sub 或 Postgres LISTEN/NOTIFY）和 durable run state。
+  # 届时 worker 用同一个镜像、不同 command 即可，CI 无需改动：
+  #
+  # agent-worker:
+  #   image: ghcr.io/zhanghoks/coresearch-agent-api:${IMAGE_TAG:-main}
+  #   container_name: coresearch-agent-worker
+  #   command: ["node", "dist/worker.js"]
+  #   env_file:
+  #     - /srv/coresearch/env/production.env
+  #   environment:
+  #     AGENT_ROLE: worker
+  #   network_mode: host
+  #   volumes:
+  #     - /srv/coresearch/data/pi:/var/lib/research-canvas/pi
+  #     - /srv/coresearch/data/runtime:/srv/coresearch/runtime
+  #   restart: unless-stopped
+  #   profiles: ["worker"]

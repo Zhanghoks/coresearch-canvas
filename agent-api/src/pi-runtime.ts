@@ -37,7 +37,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
         const persisted = await input.store.loadConversationSession(input.ctx, input.conversationId);
         const skills = (await input.store.listSkills(input.ctx)).filter((skill) => skill.enabled);
         const cwd = process.cwd();
-        const entries = persisted.header ? [persisted.header, ...persisted.entries] as FileEntry[] : undefined;
+        const entries = persisted.header ? [persisted.header, ...persisted.entries] as unknown as FileEntry[] : undefined;
         const sessionManager = SessionManager.inMemory(cwd, { id: input.conversationId }, entries);
         const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
         const prompt = systemPrompt(skills.map((skill) => ({ name: skill.name, definition: skill.definition })));
@@ -74,7 +74,8 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
                 summary: Type.String({ description: "供用户确认的简短中文说明" }),
             }),
             execute: async (_toolCallId, params, toolSignal) => {
-                const mutation = this.canvas.requestMutation(input.ctx, toolSignal);
+                // Pi 不保证给出 per-tool signal；没有时用整个 run 的 signal，abort 语义一致。
+                const mutation = this.canvas.requestMutation(input.ctx, toolSignal ?? input.signal);
                 await input.emit({
                     type: "canvas.tool.requested",
                     itemId: mutation.callId,

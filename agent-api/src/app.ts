@@ -18,6 +18,7 @@ import { SupabaseResearchStore } from "./supabase-store.js";
 import { AGENT_PROTOCOL_VERSION, type JsonObject, type RuntimeEvent } from "./types.js";
 
 export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adapter?: RuntimeAdapter } = {}) {
+    const startedAt = new Date().toISOString();
     const app = express();
     const auth = new SupabaseAuth(config.supabaseUrl, config.supabasePublishableKey);
     const hub = new EventHub();
@@ -30,7 +31,15 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
 
     app.use(cors({ origin: (origin, callback) => callback(null, !origin || config.origins.includes(origin)) }));
     app.use(express.json());
-    app.get("/health", (_request, response) => response.json({ ok: true }));
+    app.get("/health", (_request, response) => response.json({
+        ok: true,
+        status: "ok",
+        // GIT_SHA 由镜像构建时注入；CI 用它断言服务器上跑的确实是本次部署的代码，只看 200 不足以证明。
+        version: process.env.GIT_SHA?.trim() || "unknown",
+        appVersion: process.env.APP_VERSION?.trim() || "unknown",
+        runtime: config.runtime,
+        startedAt,
+    }));
 
     app.post("/internal/runtime/canvas/read", requireLoopback, asyncRoute(async (request, response) => {
         if (!codex) throw new AppError("当前运行时不是 Codex", 409, "runtime_not_codex");
@@ -66,12 +75,12 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
     }));
     app.get("/v1/projects/:projectId", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        response.json(await scope.projects.readOwned(scope.auth.userId, request.params.projectId));
+        response.json(await scope.projects.readOwned(scope.auth.userId, routeParam(request, "projectId")));
     }));
     app.delete("/v1/projects/:projectId", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
         try {
-            await scope.projects.deleteOwned(scope.auth.userId, request.params.projectId);
+            await scope.projects.deleteOwned(scope.auth.userId, routeParam(request, "projectId"));
         } catch (error) {
             if (!(error instanceof AppError) || error.code !== "project_not_found") throw error;
         }
@@ -80,7 +89,7 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
 
     app.get("/v1/projects/:projectId/canvas", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.store.readCanvas(ctx));
     }));
     app.put("/v1/projects/:projectId/canvas/state", publishCanvas(canvas));
@@ -88,12 +97,12 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
 
     app.get("/v1/projects/:projectId/canvas/projection", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.research.readProjection(ctx));
     }));
     app.put("/v1/projects/:projectId/canvas/projection", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         const revision = nonNegativeInteger(request.body?.revision, "画布 revision 无效");
         const workspace = await scope.research.saveProjection(ctx, revision, jsonObject(request.body, "画布投影无效"));
         if (workspace.revision !== revision) throw new AppError("画布投影 revision 已过期", 409, "canvas_revision_conflict");
@@ -102,103 +111,103 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
 
     app.get("/v1/projects/:projectId/entities", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.research.listEntities(ctx));
     }));
     app.post("/v1/projects/:projectId/entities", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.status(201).json(await scope.research.createEntity(ctx, jsonObject(request.body, "研究对象无效")));
     }));
     app.get("/v1/projects/:projectId/entities/:entityId", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        response.json(await scope.research.readEntity(ctx, request.params.entityId));
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        response.json(await scope.research.readEntity(ctx, routeParam(request, "entityId")));
     }));
     app.delete("/v1/projects/:projectId/entities/:entityId", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        await scope.research.archiveEntity(ctx, request.params.entityId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        await scope.research.archiveEntity(ctx, routeParam(request, "entityId"));
         response.status(204).end();
     }));
     app.get("/v1/projects/:projectId/entities/:entityId/revisions", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        response.json(await scope.research.listRevisions(ctx, request.params.entityId));
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        response.json(await scope.research.listRevisions(ctx, routeParam(request, "entityId")));
     }));
     app.post("/v1/projects/:projectId/entities/:entityId/revisions", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        response.status(201).json(await scope.research.appendRevision(ctx, request.params.entityId, jsonObject(request.body, "revision 无效")));
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        response.status(201).json(await scope.research.appendRevision(ctx, routeParam(request, "entityId"), jsonObject(request.body, "revision 无效")));
     }));
     app.post("/v1/projects/:projectId/entities/:entityId/confirm", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        response.status(201).json(await scope.research.confirmEntity(ctx, request.params.entityId, jsonObject(request.body || {}, "确认内容无效")));
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        response.status(201).json(await scope.research.confirmEntity(ctx, routeParam(request, "entityId"), jsonObject(request.body || {}, "确认内容无效")));
     }));
 
     app.get("/v1/projects/:projectId/relations", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.research.listRelations(ctx));
     }));
     app.post("/v1/projects/:projectId/relations", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.status(201).json(await scope.research.createRelation(ctx, jsonObject(request.body, "研究关系无效")));
     }));
     app.delete("/v1/projects/:projectId/relations/:relationId", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        await scope.research.deleteRelation(ctx, request.params.relationId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        await scope.research.deleteRelation(ctx, routeParam(request, "relationId"));
         response.status(204).end();
     }));
 
     app.post("/v1/projects/:projectId/conversations", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.status(201).json(await scope.conversations.create(ctx, request.body || {}));
     }));
     app.get("/v1/projects/:projectId/conversations", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.conversations.list(ctx));
     }));
     app.get("/v1/projects/:projectId/conversations/:conversationId", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        const conversation = await scope.conversations.read(ctx, request.params.conversationId);
-        response.json({ conversation, events: await scope.store.listEvents(ctx, request.params.conversationId, 0) });
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        const conversation = await scope.conversations.read(ctx, routeParam(request, "conversationId"));
+        response.json({ conversation, events: await scope.store.listEvents(ctx, routeParam(request, "conversationId"), 0) });
     }));
     app.post("/v1/projects/:projectId/conversations/:conversationId/archive", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        await scope.conversations.archive(ctx, request.params.conversationId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        await scope.conversations.archive(ctx, routeParam(request, "conversationId"));
         response.status(204).end();
     }));
     app.post("/v1/projects/:projectId/conversations/:conversationId/turns", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        const result = await runtime.runTurn(scope.store, ctx, { conversationId: request.params.conversationId, prompt: requiredText(request.body?.prompt, "消息不能为空") });
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        const result = await runtime.runTurn(scope.store, ctx, { conversationId: routeParam(request, "conversationId"), prompt: requiredText(request.body?.prompt, "消息不能为空") });
         response.status(202).json(result);
     }));
     app.post("/v1/projects/:projectId/conversations/:conversationId/runs/:runId/abort", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        await runtime.abort(scope.store, ctx, request.params.conversationId, request.params.runId);
-        response.status(202).json({ runId: request.params.runId, abortRequested: true });
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        await runtime.abort(scope.store, ctx, routeParam(request, "conversationId"), routeParam(request, "runId"));
+        response.status(202).json({ runId: routeParam(request, "runId"), abortRequested: true });
     }));
     app.get("/v1/projects/:projectId/conversations/:conversationId/events", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        await scope.conversations.read(ctx, request.params.conversationId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        await scope.conversations.read(ctx, routeParam(request, "conversationId"));
         const after = optionalNonNegativeInteger(request.query.after);
         response.status(200).set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Agent-Protocol-Version": String(AGENT_PROTOCOL_VERSION) });
         response.flushHeaders();
         let cursor = after;
         let loading = true;
         const buffered: RuntimeEvent[] = [];
-        const unsubscribe = hub.subscribe(request.params.conversationId, (event) => {
+        const unsubscribe = hub.subscribe(routeParam(request, "conversationId"), (event) => {
             if (event.projectId !== ctx.projectId || event.sequence <= cursor) return;
             if (loading) buffered.push(event);
             else {
@@ -207,7 +216,7 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
             }
         });
         request.on("close", unsubscribe);
-        for (const event of await scope.store.listEvents(ctx, request.params.conversationId, cursor)) {
+        for (const event of await scope.store.listEvents(ctx, routeParam(request, "conversationId"), cursor)) {
             writeSse(response, event);
             cursor = event.sequence;
         }
@@ -221,22 +230,22 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
 
     app.get("/v1/projects/:projectId/skills", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.store.listSkills(ctx));
     }));
     app.put("/v1/projects/:projectId/skills/:name", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         response.json(await scope.store.saveSkill(ctx, {
-            name: requiredText(request.params.name, "Skill 名称不能为空"),
+            name: requiredText(routeParam(request, "name"), "Skill 名称不能为空"),
             definition: requiredText(request.body?.definition, "Skill 内容不能为空"),
             enabled: request.body?.enabled !== false,
         }));
     }));
     app.delete("/v1/projects/:projectId/skills/:name", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
-        await scope.store.deleteSkill(ctx, request.params.name);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
+        await scope.store.deleteSkill(ctx, routeParam(request, "name"));
         response.status(204).end();
     }));
 
@@ -266,7 +275,7 @@ function createRuntimeAdapter(config: AppConfig, canvas: CanvasBridge): RuntimeA
 function publishCanvas(canvas: CanvasBridge) {
     return asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         const clientId = requiredText(request.body?.clientId, "缺少画布客户端 ID");
         const revision = nonNegativeInteger(request.body?.revision, "画布 revision 无效");
         const snapshot = jsonObject(request.body?.snapshot, "画布快照无效");
@@ -280,7 +289,7 @@ function publishCanvas(canvas: CanvasBridge) {
 function completeCanvasTool(canvas: CanvasBridge) {
     return asyncRoute(async (request, response) => {
         const scope = requestScope(response);
-        const ctx = await scope.projects.context(scope.auth.userId, request.params.projectId);
+        const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         const result = jsonObject(request.body?.result, "工具结果无效");
         if (request.body?.snapshot !== undefined || request.body?.revision !== undefined) {
             const clientId = requiredText(request.body?.clientId, "缺少画布客户端 ID");
@@ -290,7 +299,7 @@ function completeCanvasTool(canvas: CanvasBridge) {
             if (workspace.revision !== revision) throw new AppError("画布快照 revision 已过期", 409, "canvas_revision_conflict");
             canvas.publishSnapshot(ctx, clientId, revision, snapshot);
         }
-        canvas.completeMutation(ctx, requiredText(request.params.requestId, "缺少工具调用 ID"), result);
+        canvas.completeMutation(ctx, requiredText(routeParam(request, "requestId"), "缺少工具调用 ID"), result);
         response.status(204).end();
     });
 }
@@ -317,6 +326,16 @@ function runtimeToken(request: Request) {
     const match = /^Bearer\s+(.+)$/i.exec(request.header("authorization") || "");
     if (!match?.[1]) throw new AppError("缺少运行时 token", 401, "invalid_runtime_token");
     return match[1];
+}
+
+/**
+ * Express 5 的 ParamsDictionary 索引签名是 string | string[]，配合 noUncheckedIndexedAccess
+ * 读出来是 string | string[] | undefined。直接传进 UUID 查询会把数组静默带下去，这里统一收窄。
+ */
+function routeParam(request: Request, name: string) {
+    const value = request.params[name];
+    if (typeof value !== "string" || !value) throw new AppError(`缺少路径参数 ${name}`, 400, "invalid_input");
+    return value;
 }
 
 function requestScope(response: Response) {

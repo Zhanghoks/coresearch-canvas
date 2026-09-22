@@ -304,7 +304,8 @@ function databaseError(error: { code?: string; message: string }) {
 }
 
 function project(value: Record<string, unknown>) {
-    const nested = Array.isArray(value.canvas_workspaces) ? value.canvas_workspaces[0] : value.canvas_workspace_id ? { id: value.canvas_workspace_id } : null;
+    // canvas_workspaces.project_id 唯一，PostgREST 把这个一对一嵌入返回成对象；创建项目的 RPC 则直接给出 canvas_workspace_id。
+    const nested = value.canvas_workspace_id ? { id: value.canvas_workspace_id } : first(value.canvas_workspaces);
     const canvasWorkspaceId = string(row(nested).id);
     if (!canvasWorkspaceId) throw new AppError("项目缺少画布工作区", 500, "invalid_project");
     return { id: string(value.id), ownerUserId: string(value.owner_user_id), name: string(value.name), canvasWorkspaceId, createdAt: string(value.created_at), updatedAt: string(value.updated_at) };

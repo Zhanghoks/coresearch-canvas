@@ -107,7 +107,7 @@ class BlockingRuntime implements RuntimeAdapter {
     execute(input: Parameters<RuntimeAdapter["execute"]>[0]) {
         const promise = new Promise<void>((resolve) => {
             this.completions.set(input.runId, resolve);
-            input.signal.addEventListener("abort", resolve, { once: true });
+            input.signal.addEventListener("abort", () => resolve(), { once: true });
         });
         this.settlements.set(input.runId, promise);
         return promise;

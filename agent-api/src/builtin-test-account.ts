@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { AppError } from "./errors.js";
 
@@ -29,7 +29,7 @@ export async function provisionBuiltinTestAccount(supabaseUrl: string, secretKey
     throw provisionError();
 }
 
-async function findUserId(admin: ReturnType<typeof createClient>) {
+async function findUserId(admin: SupabaseClient) {
     for (let page = 1; ; page += 1) {
         const { data, error } = await admin.auth.admin.listUsers({ page, perPage: USERS_PER_PAGE });
         if (error) throw provisionError();

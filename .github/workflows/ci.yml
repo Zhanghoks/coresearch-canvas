@@ -1,0 +1,110 @@
+name: CI
+
+# PR 和 main 都跑。这是仓库第一个会执行 typecheck / test 的 workflow——
+# 在此之前镜像是盲构建的，agent-api 的 typecheck 已经累积到 47 个错误没人发现。
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-api:
+    name: agent-api typecheck + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与 agent-api/package.json engines 和 agent-api/Dockerfile 的 node:22.19-alpine 一致。
+          node-version: "22.19"
+          cache: npm
+          cache-dependency-path: agent-api/package-lock.json
+
+      - name: Install
+        working-directory: agent-api
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: agent-api
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: agent-api
+        # 依赖真实 Supabase 的 RLS 集成用例通过 RUN_SUPABASE_RLS_TESTS 自检跳过，
+        # 这里不设该变量，CI 不会写任何 Supabase 项目。
+        run: npm test
+
+  web:
+    name: web typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        working-directory: web
+        run: bun test
+
+      - name: Build
+        working-directory: web
+        # 这是 web 的真实 gate：Vercel 也是跑 vite build，它不做类型检查。
+        # 注意 web/vite.config.ts 会读 ../VERSION 并 alias 到 ../canvas-agent/src，
+        # 所以必须在完整 checkout 下构建，不能只带 web/ 目录。
+        run: bun run build
+
+      - name: Typecheck（非阻断）
+        working-directory: web
+        # web 在 main 上有 43 个存量类型错误（集中在 src/pages/canvas/project.tsx 等画布代码）。
+        # 清理它们与本次部署改造无关，且相关文件正在重构中，所以先只上报不阻断。
+        # 清零之后请删掉 continue-on-error，让它变成真正的 gate。
+        continue-on-error: true
+        run: bun run typecheck
+
+  migration-guard:
+    name: Migration 提醒
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查是否新增 migration
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          added="$(git diff --name-only --diff-filter=A "$BASE" "$HEAD" -- 'agent-api/supabase/migrations/*.sql' || true)"
+          if [ -z "$added" ]; then
+            echo "本次没有新增 migration。" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## ⚠️ 本次包含新增 migration"
+            echo
+            echo '```'
+            echo "$added"
+            echo '```'
+            echo
+            echo "migration 目前是**手工**在 Supabase SQL Editor 执行的，且不可重复执行。"
+            echo "合并前请先按文件名顺序执行完这些 SQL，否则新代码上线后会直接报错。"
+            echo "规则见 \`agent-api/supabase/migrations/README.md\`。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 只提醒，不阻断：migration 必须先于代码上线，卡住 PR 反而会诱导绕过。
+          echo "::warning::本次包含新增 migration，请确认已在 Supabase SQL Editor 执行"

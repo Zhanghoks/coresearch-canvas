@@ -1,0 +1,179 @@
+name: Deploy production
+
+# main 更新 → CI → 构建镜像推 GHCR → SSH 触发服务器 deploy.sh → 验证 /health。
+# 复杂逻辑都在 deploy/production/deploy.sh 里，这个 workflow 只负责触发和验证。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent-api/**"
+      - "deploy/production/**"
+      - ".github/workflows/deploy-production.yml"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "要部署的镜像 tag（留空则构建当前 commit）。回滚时填 sha-<旧commit>"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+# 串行化：push A / B / C 连续到来时，不会有多个进程同时操作同一台服务器。
+# cancel-in-progress 必须是 false —— 取消一个部署到一半的 job 会留下不确定的服务器状态。
+concurrency:
+  group: coresearch-production
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/zhanghoks/coresearch-agent-api
+
+jobs:
+  ci:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+          cache: npm
+          cache-dependency-path: agent-api/package-lock.json
+
+      - name: Install
+        working-directory: agent-api
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: agent-api
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: agent-api
+        run: npm test
+
+  image:
+    name: 构建并推送镜像
+    needs: ci
+    runs-on: ubuntu-latest
+    # 手动指定 image_tag（回滚）时跳过构建，直接用已有镜像。
+    if: github.event.inputs.image_tag == ''
+    outputs:
+      tag: ${{ steps.tag.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: echo "value=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: 读取 VERSION
+        id: version
+        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: agent-api
+          # 生产机是单机单架构，这里只构建它需要的那一个，比 tag 发布用的 multi-arch 流水线快得多。
+          platforms: ${{ vars.DEPLOY_PLATFORM || 'linux/amd64' }}
+          push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            APP_VERSION=${{ steps.version.outputs.value }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.value }}
+            ${{ env.IMAGE_NAME }}:main
+          cache-from: type=gha,scope=agent-api-deploy
+          cache-to: type=gha,mode=max,scope=agent-api-deploy
+
+  deploy:
+    name: 部署到服务器
+    needs: [ci, image]
+    # image job 在回滚场景会被 skip，此时仍要继续。
+    if: always() && needs.ci.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: |
+          tag="${{ github.event.inputs.image_tag }}"
+          [ -n "$tag" ] || tag="${{ needs.image.outputs.tag }}"
+          [ -n "$tag" ] || { echo "无法确定镜像 tag"; exit 1; }
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+          echo "将部署镜像 tag: $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 准备 SSH
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "${SERVER_SSH_PORT:-22}" -H "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 同步部署文件到服务器
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+        # compose 文件和 deploy.sh 每次部署都覆盖，服务器上因此不需要源码、不需要 git。
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/id_deploy -P "${SERVER_SSH_PORT:-22}" \
+            deploy/production/docker-compose.yml deploy/production/deploy.sh \
+            "$SERVER_USER@$SERVER_HOST:/srv/coresearch/app/"
+          ssh -i ~/.ssh/id_deploy -p "${SERVER_SSH_PORT:-22}" "$SERVER_USER@$SERVER_HOST" \
+            'chmod +x /srv/coresearch/app/deploy.sh'
+
+      - name: 执行 deploy.sh
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+          IMAGE_TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -p "${SERVER_SSH_PORT:-22}" "$SERVER_USER@$SERVER_HOST" \
+            "IMAGE_TAG='$IMAGE_TAG' /srv/coresearch/app/deploy.sh"
+
+      - name: 公网 health 校验
+        if: vars.API_PUBLIC_URL != ''
+        env:
+          API_PUBLIC_URL: ${{ vars.API_PUBLIC_URL }}
+          EXPECTED_SHA: ${{ github.sha }}
+          IMAGE_TAG: ${{ steps.tag.outputs.value }}
+        # deploy.sh 已经在服务器本机验过 /health；这一步额外验证 Cloudflare Tunnel 通路，
+        # 并断言返回的 version 就是本次部署的 commit —— 只看 200 无法证明新代码真的起来了。
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --max-time 15 --retry 5 --retry-delay 3 --retry-all-errors "$API_PUBLIC_URL/health")"
+          echo "health: $body"
+          echo "公网 health: \`$body\`" >> "$GITHUB_STEP_SUMMARY"
+          reported="$(printf '%s' "$body" | jq -r '.version')"
+          if [ "${{ github.event.inputs.image_tag }}" != "" ]; then
+            echo "回滚部署（$IMAGE_TAG），跳过 version 一致性断言（返回 $reported）"
+            exit 0
+          fi
+          if [ "$reported" != "$EXPECTED_SHA" ]; then
+            echo "::error::服务器返回的 version=$reported，与本次部署的 $EXPECTED_SHA 不一致，可能拉到了旧镜像"
+            exit 1
+          fi
+          echo "version 断言通过：$reported"
+
+      - name: 清理 SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy

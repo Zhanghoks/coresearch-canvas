@@ -376,7 +376,7 @@ test("spawnCodexProcess 把 cwd 和 CODEX_HOME 交给子进程", () => {
     child.stdin = { write: () => true };
     child.kill = () => true;
     spawnCodexProcess({ bin: "codex", cwd: "/tmp/ws", codexHome: "/tmp/home", apiKey: "k" }, (_bin, _args, options) => {
-        recorded.cwd = options.cwd;
+        recorded.cwd = options.cwd?.toString();
         recorded.env = options.env as NodeJS.ProcessEnv;
         return child as never;
     });

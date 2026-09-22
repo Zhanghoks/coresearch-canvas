@@ -1,0 +1,140 @@
+# AGENTS.md
+
+本文档用于约束本项目中的 AI / 自动化开发行为。开发时优先遵循本文件，其次遵循用户当前消息。
+
+## 基本原则
+
+- 先读现有代码，再动手修改，优先沿用项目已有结构和写法。
+- 写代码保持最少行数，能简单实现就不要引入复杂抽象。
+- 标准格式、协议、解析、压缩、加密、日期等通用能力优先使用成熟稳定的库，不要手写底层实现，除非用户明确要求或项目已有实现必须沿用。
+- 不要为了“兼容更多场景”写大量分支，只实现当前明确需要的功能。
+- 项目尚未上线，不需要兼容旧数据；本地存储结构调整时直接按新设计修改，不写旧字段兼容或数据迁移兜底，除非用户明确要求。
+- 每次写完代码，不需要检查语法，不需要执行构建，用户会自己做。
+- 不要改无关文件，不要顺手重构。
+- 如果工作区已有用户改动，不要回滚，不要覆盖；只在必要范围内追加修改。
+
+## 反复提醒沉淀
+
+- 如果开发过程中总是遇到某个问题，或者用户反复提醒同一个注意事项，需要把该注意事项补充到本文件。
+- 补充时写成明确、可执行的规则，避免只写模糊描述。
+- 新规则应放到最相关的章节；找不到合适章节时放到“项目注意事项”。
+
+## 前端规范
+
+- 前端使用 Vite、React、React Router、TypeScript、Ant Design、Tailwind、Zustand。
+- 编写 Ant Design 相关代码时，参考 https://ant.design/llms-full.txt 理解组件 API、示例和设计规范，并优先结合项目当前 antd 版本与既有写法。
+- 外部服务请求统一放在 `web/src/services/api/`，由浏览器前端直连，不假设存在项目后端。
+- 全局或跨页面状态优先放在 `web/src/stores/`。
+- 已经放在全局 store 或全局 hook 中的状态/动作，组件需要时直接使用对应 store/hook，不要为了“纯组件”层层透传 props；避免一个组件传递过多参数。
+- 全局组件、全局常量、全局配置等全局性质的内容不要作为 props 或参数层层传递；哪里需要就在哪里直接从对应全局入口获取。
+- 多个页面重复出现的 UI 副作用动作，例如复制文本并提示、下载并提示、统一确认弹窗，优先抽成 `web/src/hooks/` 下的全局 hook；不要放进 store，除非它确实是需要共享/订阅的状态。
+- 路由页面放在 `web/src/pages/`，页面布局放在 `web/src/layouts/`，路由配置放在 `web/src/router.tsx`。
+- 画布页面放在 `web/src/pages/canvas/`，画布组件放在 `web/src/components/canvas/`，画布状态放在 `web/src/stores/canvas/`，画布工具函数放在 `web/src/lib/canvas/`。
+- 页面按目录组织，例如 `web/src/pages/image/index.tsx`；页面里只有一个主业务组件时直接写在对应页面入口中，不要单独拆 `Manager` 组件再传一堆 props。
+- 不要新增只做简单转发的组件，例如只 `return <X>{children}</X>` 或只换个名字透传 props；直接在使用处使用真实组件或把逻辑写进当前文件。
+- 页面私有 hook 放在对应页面目录下，例如 `admin/assets/use-admin-assets.ts`；只有多个页面真实复用的 hook 才放到外层 `hooks/`。
+- 管理后台页面私有组件放到各自页面目录的 `components/` 下，例如 `admin/assets/components/`、`admin/prompts/components/`；不要为了单页面使用放到 `admin/components/` 共享目录。
+- 管理后台主题、背景、卡片阴影、表格配色等统一在 `web/src/lib/app-theme.ts`、`AppProviders` 或必要的全局 CSS 作用域中配置；页面私有组件不要自己写 `dark ? ...` 主题分支。
+- Ant Design 的 Dropdown、Menu、Select、Cascader、TreeSelect 等弹层背景、悬停态和选中态颜色统一通过 `web/src/lib/app-theme.ts` 的全局 Alias Token 与组件 Token 配置；不要在业务组件内为单个弹层覆盖颜色。
+- 组件优先使用函数组件和现有 hooks，不新增大型状态管理方案。
+- UI 图标优先使用 `lucide-react` 或项目已经使用的 Ant Design 图标。
+- 页面文案保持中文。
+- 不要在组件里堆太多无关逻辑；复杂逻辑优先抽成同目录工具函数或小组件。
+- 样式优先由组件自己管理；组件私有样式优先使用 Tailwind className 或少量内联 style，不要为单个组件新增大量全局 CSS。
+- 全局 CSS 只放基础变量、全局重置、跨页面通用样式和少量第三方组件必要覆盖；不要在 `globals.css` 堆页面私有样式。
+- 代码尽量短小直接，少拆不必要组件，少做多层 props 传递，避免为了抽象堆出更多代码。
+- 前端业务数据需要浏览器本地持久化时，默认使用 `localforage`；`localStorage` 只用于极小的简单配置，不要用来保存业务列表、生成记录、图片、base64 或大 JSON。
+
+## 画布 UI 规范
+
+- 做 canvas 前端 UI 时必须遵循当前画布主题。
+- 优先使用 `canvasThemes`、`useThemeStore` 或 Ant Design `ConfigProvider` token。
+- 不要硬编码黑白、stone、slate 等颜色导致浅色/深色主题不一致。
+- 新增画布按钮、弹窗、浮层时，尽量复用已有工具栏、节点面板、Modal 的视觉风格。
+- 画布顶部工具栏和状态信息优先采用极简扁平风格：无边框、无阴影、无胶囊背景，融入整体背景，弱化按钮感，仅保留轻微 hover 反馈，保持简洁现代、低视觉重量。
+- 左侧画布面板等列表里的节点/元素缩略图容器，非图片类型（文本、配置、视频、音频等）不要使用 `theme.node.fill`（`#e7e5df`/`#292524`）这类灰色背景，图标直接无背景展示，尽量不要给多余底色，保持干净。
+- 画布内的操作按钮（如面板里的「添加」「导出」「选择」等）默认用扁平无底色样式：透明背景、仅 `hover:bg-black/5 dark:hover:bg-white/10` 轻微反馈，靠图标+文字表达，不要用 `theme.toolbar.activeBg`（`#e7e5df`/`#3a3631`）或 `theme.node.fill` 之类的灰色作为按钮填充底色。灰色 `activeBg` 只允许用于「选中态」等需要表达状态的高亮，不要当普通装饰底色。
+- 图片节点尺寸逻辑要尊重原始比例，除非功能明确要求自由变形。
+- 画布底部工具栏和双击创建菜单只放研究主流程节点（Seed、Direction、Research Question、Problem、Hypothesis、Approach、Method、Evaluation、Idea），不要把文本、图片、视频、音频、配置、组、框架、便签、问题、PDF、网页放回这些入口。
+- 画布左侧工作区栏只保留产品导航与项目列表，不要再加「画布元素 / 资产库 / 研究数据」底部入口。
+
+## 文档规范
+
+- README 保持简洁，只放项目介绍、核心功能、快速开始和文档入口。
+- `docs/index.md` 放给 AI 使用的文档索引，不要再放到 `docs/content/docs/` 内容目录里。
+- 详细功能介绍写到 `docs/content/docs/overview/features.mdx`。
+- 后续待办写到 `docs/content/docs/progress/todo.mdx`。
+- 已实现但还需要用户测试确认的事项写到 `docs/content/docs/progress/pending-test.mdx`。
+- `docs/content/docs/progress/pending-test.mdx` 用来记录这个版本实际做了哪些可测试变更；`CHANGELOG.md` 的 `Unreleased` 只保留对这些变更的版本级归纳，避免逐条照搬实现细节。
+- 每次重大改动（新增/调整/删除功能、接口或工具，影响用户可感知行为）完成后，都要在 `CHANGELOG.md` 的 `Unreleased` 追加一条记录，按 `[新增]` / `[调整]` / `[修复]` / `[优化]` 前缀分类，用一句中文归纳；纯内部重构、格式化、无用户可感知影响的小改动可不记。
+- 每次 todo 事项完成后，先从 `docs/content/docs/progress/todo.mdx` 移到 `docs/content/docs/progress/pending-test.mdx`，不要直接写进正式功能说明；用户确认测试通过后再更新 `docs/content/docs/overview/features.mdx`。
+- 每次任务完成前，都要根据实际变更检查并更新 `docs/content/docs/progress/todo.mdx` 和 `docs/content/docs/progress/pending-test.mdx`；如果功能或待办没有变化，也要确认无需修改。
+- 文档不要写过期日期；除非用户明确要求记录具体时间。
+
+## 发版本流程
+
+- 发版本时，先把 `CHANGELOG.md` 的 `Unreleased` 变更整理成新的版本记录，并保留空的 `Unreleased` 标题。
+- 按当前版本号提升一个版本，更新根目录 `VERSION`。
+- 将当前未提交的代码全部提交到 Git。
+- 提交完成后，给当前提交打最新版本号对应的 tag，例如 `v0.0.5`。
+- 发版本流程中不要执行编译、测试或构建，除非用户明确要求。
+
+## PR 审查与处理
+
+- 审查 PR 时必须把“需求价值”和“实现质量”分开判断，分别给出结论；实现差不等于需求不需要，需求有价值也不等于当前代码可以合并。
+- 需求价值需要单独结合项目方向、用户场景、现有能力和后续规划判断；无法从项目上下文确定是否需要时，必须询问用户，不得仅凭代码质量、作者或改动规模推断需求不需要。
+- 实现质量重点检查正确性、安全性、改动范围、重复代码、无关文件、现有结构复用、可维护性、测试与文档以及与最新 `main` 的冲突。改动几十个文件、疑似 AI 批量生成、重复代码多只能作为重点复核或拒绝当前实现的信号，不能单独作为放弃需求的依据。
+- 对“需求有价值但实现不合格”的 PR，优先考虑要求作者修改、提取可用思路后自行重做，或把需求保留到 issue/todo；不要直接把需求一起否定。
+- 建议关闭 PR 前，必须先向用户分别说明需求价值、实现质量、可保留的思路和建议处理方式，并取得用户明确确认；批量关闭时也要让用户能看清每个 PR 的需求是否仍需保留。
+- 可以先在独立分支审查、修复、测试和准备提交；任何合并进 `main` 的操作都必须先说明修复内容、测试结果、风险与冲突，并取得用户明确同意。需要 force-push PR 作者分支时也必须提前说明影响并取得同意。
+
+## 设计文档
+
+- 画布研究实体/关系相关功能的设计来源是本仓库 `docs/design/`（从 CoResearch 设计树复制；CoResearch 是正式研究画布 SaaS，本仓库是其前身本地画布工具）。按 `docs/design/README.md` 的索引阅读：`research-flow.md` → `idea-formation/` → `canvas/research-canvas.md` → `canvas/huabu-domain-binding.md` → `canvas/huabu-node-presentation-and-links.md` → `canvas/huabu-reverse-engineering.md`；`workspace.md`/`space.md`/`idea-structure.md` 是对象模型背景。架构术语与 ADR 仍以 CoResearch 仓库的 `CONTEXT.md` 和 `docs/adr/` 为准；设计文中指向那些路径的交叉引用在本仓库可能无效。
+- 当前正在对照 `docs/design/canvas/huabu-node-presentation-and-links.md` 分阶段把本仓库画布 UI/UX 往这份设计推进；该设计假设了完整的版本化 Research Domain 后端（revision、领域校验、ConfirmResearchRevision，CoResearch 那边有），本仓库目前只有纯前端 plain JSON 数据模型，涉及需要真实后端才能诚实实现的部分（服务端关系校验、版本号/自动 stale 传播、Agent Node 上下文快照等）先不做，不要在前端伪造这些语义。
+
+## 项目注意事项
+
+- 新增或调整超时、重试次数、大小限制、并发上限等会改变实际行为的边界值前，必须先向用户说明适用环节、默认值和失败后的处理方式，并取得确认；不要把经验值当成纯内部实现静默加入。
+- 当前画布项目和“我的素材”主要保存在浏览器本地，不要在文档中误写成已支持云同步。
+- 当前 AI API Key 存在浏览器本地，并由前端直接请求 OpenAI 兼容接口；涉及安全说明时要写清楚。
+- Docker 静态资源路径目前仍是待办项，文档中不要过度承诺生产部署已经完全验证。
+- Agent 对话消息必须同时按 `threadId`、`turnId` 和 `itemId` 归属；实时事件只用于补充未物化的 turn，历史快照成为权威后不得重复合并同一条消息。
+- Agent 通信协议版本与消息存储版本必须独立管理；消息存储格式升级时必须先备份再迁移，遇到未知版本、损坏清单或冲突备份时拒绝覆盖原文件，不得按记录数量或文件大小静默裁剪历史元数据。
+- 本地启动或浏览器验收时不要关闭用户已经打开的浏览器窗口或标签页；需要自动化验证时使用独立测试页面，避免打断用户当前页面和对话状态。
+- 研究节点 Skill 权威源是 `canvas-agent/skills/`；修改后需运行 `plugins/infinite-canvas/scripts/sync-skills.sh` 同步 Codex 插件副本，不要只改插件目录里的同名 Skill。
+- 项目级 Agent 配置、Skill 和工作空间一律落在仓库 `.coresearch/`（可部分提交 Git）。密钥、日志、Pi 会话和项目数据一律落在仓库 `.data/`（可用 `CANVAS_DATA_DIR` 覆盖），不要再写入 `~/.infinite-canvas` 或根目录 `data/`。
+- 未获用户明确确认前，不要迁移 IndexedDB / localStorage 仍使用 `infinite-canvas` 名称的浏览器存储键，也不要删除媒体生成运行时能力；主流程入口继续只暴露九种研究节点。
+
+## Agent skills
+
+### Agent 参考文档与注册清单
+
+- Agent 开发先看下面三份参考文档：
+  - 注册清单：[`docs/agents/agent-registration.md`](docs/agents/agent-registration.md)，记录当前实际注册的 tools、extensions、npm packages 和 Skills。
+  - 研究 Flow：[`docs/design/research-flow.md`](docs/design/research-flow.md)，规定节点顺序、探索/确认/提交边界和人机分工。
+  - 后端数据管理：[`docs/design/backend-data-management.md`](docs/design/backend-data-management.md)，规定 Project、Research DB、Canvas Projection、Research Wiki、Workspace、Artifact 和 Paper Workspace 的真值边界。
+  - 节点模板设计：[`docs/design/canvas/huabu-node-presentation-and-links.md`](docs/design/canvas/huabu-node-presentation-and-links.md)，规定节点的 Identity / Preview / Detail 展示层级与关系连接设计。
+- 节点模板的实现契约不写在设计文档里：`web/src/lib/canvas/research-node-contract.ts` 负责节点问题、下一步、边界和动作；`canvas-agent/src/canvas/research-headings.ts` 负责各节点 Markdown 的权威 `##` 模板。修改节点模板时需要同时核对设计文档、这两个实现契约和相关 Skill。
+- `canvas-agent/skills/` 是研究节点与论文 Skills 的权威源；`plugins/infinite-canvas/skills/` 和 `.coresearch/skills/` 都是派生/安装副本。
+
+### Agent 架构设计
+
+- 架构总览先读 [`docs/design/canvas/research-canvas.md`](docs/design/canvas/research-canvas.md)：浏览器 Web Canvas 持有当前画布交互状态；本地 `canvas-agent` 负责 HTTP/SSE、Pi 会话、会话历史、Skills、Extensions 和 Canvas tool 分发；画布写入仍通过网页确认完成。
+- 本地侧栏主链路是 `Browser → canvas-agent HTTP/SSE → Pi AgentSession → model`。Pi 的 33 个 Canvas custom tools 最终通过 `CanvasSession.callTool` 操作当前连接的浏览器画布；`canvas-permissions` 负责 `bash`、`edit`、`write` 审批。
+- Codex App 插件是兼容入口，链路是 `Codex → infinite-canvas MCP → canvas-agent /api/tools → CanvasSession`；它不是本地侧栏 Pi 的另一套 Canvas 事实源。
+- 多用户托管链路单独参考 [`docs/design/hosted-codex-runtime.md`](docs/design/hosted-codex-runtime.md) 和 [`docs/design/project-workspace-and-artifacts.md`](docs/design/project-workspace-and-artifacts.md)。`agent-api` 的 Project、Conversation、runtime token、Codex MCP 与本地 `canvas-agent` 的站点工作空间不要混写成同一运行时。
+- 架构设计文档描述目标边界；当前实现仍以代码为准。涉及存储、传输和 Agent 工具的旧画布设计若标有 Superseded，不得据此声称已有 Research Domain、revision、服务端关系校验或自动 stale 传播。
+- 修改 Agent 链路时先判断属于哪一层：浏览器协议/CanvasSession、Pi runtime、Canvas tool、Extension/Skill、MCP 适配器或托管 `agent-api`，不要跨层复制第二套状态或工具协议。
+
+### Issue tracker
+
+Issues and specs live as markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five roles, same string as the role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` plus `docs/adr/` when present. See `docs/agents/domain.md`.

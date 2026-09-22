@@ -1,0 +1,53 @@
+---
+title: Codex App Plugin
+description: Install and use the CoResearch plugin in Codex App
+---
+
+# Codex App Plugin
+
+The plugin connects Codex to a local Canvas Agent so you can open CoResearch, read research nodes, and advance the research workflow. Its source lives in `plugins/infinite-canvas/` (directory name kept for marketplace compatibility; display name is CoResearch).
+
+Authoritative research Skills are in `canvas-agent/skills/`. After editing them, run `plugins/infinite-canvas/scripts/sync-skills.sh` before republishing or reinstalling the plugin.
+
+## Ask Codex to install it
+
+Send this request to Codex:
+
+```text
+Install the CoResearch Codex plugin from https://github.com/Zhanghoks/Research-canvas.git.
+Clone it to ~/plugins/infinite-canvas, verify plugins/infinite-canvas/.codex-plugin/plugin.json,
+add the repository to my personal marketplace with `codex plugin marketplace add ~`,
+then install `infinite-canvas@personal`. Validate the installation and tell me whether a new
+conversation is required to load the Skill and MCP tools.
+```
+
+## Manual installation
+
+```bash
+mkdir -p ~/plugins
+git clone https://github.com/Zhanghoks/Research-canvas.git ~/plugins/infinite-canvas
+codex plugin marketplace add ~
+codex plugin add infinite-canvas@personal
+```
+
+The personal marketplace entry must point to the plugin subdirectory. Start a new Codex conversation after installation so the Skill and MCP tools load completely.
+
+For development from this repository:
+
+```bash
+cd /path/to/Research-canvas
+codex plugin marketplace add "$(pwd)"
+codex plugin add infinite-canvas@infinite-canvas-local
+```
+
+## Usage
+
+In a new Codex conversation, ask it to open CoResearch, create a canvas, and connect Codex. The plugin starts Canvas Agent, reads its connection URL and token, and opens the local Vite frontend from this repository.
+
+You can then ask Codex to summarize research nodes, explore Directions in chat first, or commit confirmed nodes to the canvas.
+
+Reinstall or refresh the plugin after changing its manifest, MCP configuration, Skills, exposed MCP tools, app, or entry scripts. The agent's default MCP command is:
+
+```bash
+npx -y @basketikun/canvas-agent@latest mcp
+```

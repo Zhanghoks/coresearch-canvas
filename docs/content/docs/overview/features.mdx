@@ -1,0 +1,58 @@
+---
+title: Features
+description: Major features available in the current project
+---
+
+# Features
+
+This project’s product line is a **research-workflow canvas + Agent**. Multimedia generation inherited from Infinite Canvas remains available at runtime but is not the primary entry path.
+
+## Research flow
+
+- Nine research node types: Seed, Direction, Research Question, Problem, Hypothesis, Approach, Method, Evaluation, Idea.
+- The bottom toolbar “+” menu and double-click create menu expose only these nine types.
+- Each research card has a type identity, editable summary (`summary`), and a Markdown document (`document`) opened on double-click.
+- Stage transitions are enforced by `research_workflow_advance`: explore returns candidates only; the user must confirm before `commit` / `synthesize` writes the canvas.
+- See [Research Interaction](/docs/progress/research-interaction).
+
+## Canvas projects
+
+- Create, rename, delete, import, and export canvas projects.
+- Persist projects under repo `.data/users/<userId>/projects/`; optional WebDAV sync. Hosted cloud sync is still evolving.
+
+## Infinite canvas
+
+- Pan, zoom, reset the view, minimap, multi-select, copy/paste, undo/redo, and connections.
+- Dot, line, or blank backgrounds; light and dark themes.
+
+## AI Agent
+
+- Side panel chat against the selected node context; unconfirmed ideas stay in conversation.
+- Local Canvas Agent embeds Pi in the sidebar. Add a provider API key in Agent Setup. Skills and instructions live in `.coresearch/`; keys, sessions, logs, and projects live in `.data/`. Canvas writes still require in-page confirmation. The Codex App plugin still uses MCP (`canvas-agent mcp`).
+- Optional hosted Agent API for multi-user Project / Conversation paths behind Supabase auth.
+- Authoritative research Skills live in `canvas-agent/skills/`; the Codex plugin copy is produced by a sync script.
+
+## Research Artifacts
+
+- Explicit user-requested saves create immutable Markdown Artifacts; list/read stay scoped to the active Canvas Project.
+
+## Configuration
+
+- Store OpenAI-compatible Base URL, API Key, and models in the browser.
+- Optional local CORS proxy (`canvas-proxy`).
+- Export / import channel and preference settings.
+
+## Secondary capabilities (not main-flow entries)
+
+Still usable via upload, paste, assets, or generation-config nodes, but **not** in the research create menus:
+
+- Text / image / video / audio nodes and generation-config nodes.
+- Asset library and image edit tools.
+- Remote node plugin system.
+- PDF / Web literature nodes (used in Deep Dive literature layers; not on the bottom toolbar).
+
+## Current limitations
+
+- Frontend-first: no full versioned Research Domain backend (no revision / server Gates).
+- API keys stay in browser storage; requests go directly to configured providers by default.
+- Production Docker static-resource paths still need broader verification.

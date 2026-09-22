@@ -1,0 +1,20 @@
+{
+  "name": "infinite-canvas",
+  "version": "0.1.0",
+  "description": "Use ZCode to read and operate CoResearch through the local Canvas Agent MCP server.",
+  "author": {
+    "name": "Zhanghoks",
+    "url": "https://github.com/Zhanghoks/Research-canvas"
+  },
+  "homepage": "https://github.com/Zhanghoks/Research-canvas",
+  "repository": "https://github.com/Zhanghoks/Research-canvas",
+  "license": "MIT",
+  "keywords": ["coresearch", "research-canvas", "canvas", "mcp", "agent"],
+  "skills": "skills",
+  "mcpServers": {
+    "infinite-canvas": {
+      "command": "npx",
+      "args": ["-y", "@basketikun/canvas-agent@latest", "mcp"]
+    }
+  }
+}

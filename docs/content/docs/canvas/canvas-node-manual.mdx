@@ -1,0 +1,46 @@
+---
+title: Canvas node manual
+description: How research-flow and secondary nodes work
+---
+
+# Canvas node manual
+
+The product line is nine **research-flow nodes**. The bottom toolbar, double-click create menu, and side-panel filter expose only those types. Text, image, video, audio, generation-config, PDF, and web nodes may still exist as secondary capabilities, but not as main-flow entries.
+
+## Research-flow nodes
+
+| Type | Role |
+| --- | --- |
+| Seed | Thin seed: confirm topic understanding |
+| Direction | Research direction; Deep Dive and literature |
+| Research Question | Researchable question statement |
+| Problem | Problem framing and evidence |
+| Hypothesis | Testable hypothesis |
+| Approach | Overall approach; next commit must include Method and Evaluation |
+| Method | Method protocol |
+| Evaluation | Evaluation matrix; iterates with Method |
+| Idea | Synthesize upstream objects into a reviewable Idea |
+
+### Using a card
+
+- Empty card: type icon plus “write summary” or “ask Agent”.
+- The card shows type, title, and summary. Selected cards may show Confirmed or Empty document scaffold.
+- Double-click opens one Markdown document. The table of contents lists every `##`. New nodes start with the official heading scaffold; opening an old empty document does not auto-apply a template. Use Complete scaffold to append missing official headings.
+- The card prompt bar sends intent to the Agent panel; canvas writes still require user confirmation.
+- Stage advance: explore in chat → user keeps a candidate → Agent runs `research_workflow_advance` `commit` / `synthesize`.
+
+### Creating nodes
+
+- Bottom “+”, double-click blank, side filter: research types only.
+- Empty-canvas entry: prefer Create Seed or open Agent.
+
+See [Research Interaction](/docs/progress/research-interaction).
+
+## Literature and materials (not main-flow entries)
+
+- `web` / `pdf`: common in Deep Dive literature layers; not on the bottom toolbar.
+- Frames / groups: view organization only; dragging a paper into a Method group does not turn it into a Method.
+
+## Secondary media nodes (legacy)
+
+Upload, paste, assets, and generation-config can still create text / image / video / audio nodes. These paths come from the pre-fork product and are **not** research main-flow entries.

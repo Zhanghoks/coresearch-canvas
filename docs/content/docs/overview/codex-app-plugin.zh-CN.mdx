@@ -1,0 +1,143 @@
+---
+title: Codex App 插件
+description: 在 Codex App 中安装并使用 CoResearch 插件
+---
+
+# Codex App 插件
+
+CoResearch 提供了一个 Codex App 插件，用来把 Codex 和本地 Canvas Agent 连接起来。安装后，你可以直接在 Codex 中说“打开 CoResearch”或“打开研究画布”，让 Codex 打开本地画布、读取研究节点并推进研究工作流。
+
+插件源码位于仓库的 `plugins/infinite-canvas/` 目录（安装路径目录名暂未改，避免打断已有 marketplace；显示名与说明为 CoResearch）。
+
+研究节点 Skill 的权威源在 `canvas-agent/skills/`。修改后请运行 `plugins/infinite-canvas/scripts/sync-skills.sh` 再发布或重装插件。
+
+## 安装方式
+
+### 让 Codex 自动安装
+
+把下面这段发给 Codex：
+
+```text
+请从 https://github.com/Zhanghoks/Research-canvas.git 安装 CoResearch Codex 插件。
+请 clone 仓库到 ~/plugins/infinite-canvas，确认 plugins/infinite-canvas/.codex-plugin/plugin.json 存在，
+把 plugins/infinite-canvas 加入 personal marketplace，先运行 codex plugin marketplace add ~，
+再运行 codex plugin add infinite-canvas@personal。
+安装后请校验插件，并告诉我是否需要开启一个新对话来加载新技能和 MCP 工具。
+```
+
+这种方式适合不想手动改 marketplace 配置的用户。Codex 会完成 clone、写入 marketplace、安装插件和基础校验。
+
+### 手动安装
+
+推荐把仓库 clone 到 Codex personal marketplace 默认会引用的位置：
+
+```bash
+mkdir -p ~/plugins
+git clone https://github.com/Zhanghoks/Research-canvas.git ~/plugins/infinite-canvas
+```
+
+确保 `~/.agents/plugins/marketplace.json` 中有 CoResearch 条目。这里的 `path` 要指向仓库里的插件子目录：
+
+```json
+{
+  "name": "personal",
+  "interface": {
+    "displayName": "Personal"
+  },
+  "plugins": [
+    {
+      "name": "infinite-canvas",
+      "source": {
+        "source": "local",
+        "path": "./plugins/infinite-canvas/plugins/infinite-canvas"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+然后注册 personal marketplace 并安装插件：
+
+```bash
+codex plugin marketplace add ~
+codex plugin add infinite-canvas@personal
+```
+
+安装完成后，建议新建一个 Codex 对话，让新的 skill 和 MCP 工具完整加载。
+
+### 本仓库开发调试安装
+
+如果你正在 CoResearch 仓库中开发插件，可以直接使用仓库自带的 marketplace：
+
+```bash
+cd /path/to/Research-canvas
+codex plugin marketplace add "$(pwd)"
+codex plugin add infinite-canvas@infinite-canvas-local
+```
+
+仓库内的 `.agents/plugins/marketplace.json` 已经指向 `./plugins/infinite-canvas`，适合开发者本地调试。
+
+## 使用插件
+
+新建 Codex 对话后，可以直接说：
+
+```text
+打开 CoResearch 新建画布并连接好 Codex
+```
+
+插件会启动本地 Canvas Agent，读取连接地址和 token，然后打开本仓库本地前端（`web` 的 Vite 地址）并自动新建、连接画布。
+
+画布打开后可以继续让 Codex 操作研究画布：
+
+```text
+读取当前画布并总结研究节点结构
+在这个 Seed 上探索研究方向，先只在对话里给出候选
+把我确认的 Direction 写到画布上
+```
+
+研究 Skill 修改后请先运行 `plugins/infinite-canvas/scripts/sync-skills.sh`，再重装或刷新插件。
+## 更新插件
+
+普通业务代码变更通常不需要更新插件。只有改了下面这些内容时，才建议重新安装或刷新插件：
+
+- `plugins/infinite-canvas/.codex-plugin/plugin.json`
+- `plugins/infinite-canvas/.mcp.json`
+- `plugins/infinite-canvas/skills/` 下的技能说明
+- 插件暴露的 MCP、app 或入口脚本
+
+重新安装后建议开启新对话，避免旧对话继续使用缓存中的技能和 MCP 工具。
+
+## 手动排查
+
+插件默认通过下面的 MCP 命令启动 Canvas Agent：
+
+```bash
+npx -y @basketikun/canvas-agent@latest mcp
+```
+
+如果需要手动排查，先启动画布：
+
+```bash
+cd web
+bun install
+bun run dev
+```
+
+然后启动本地 Agent：
+
+```bash
+npx -y @basketikun/canvas-agent@latest
+```
+
+从 Agent 输出或 `http://127.0.0.1:17371/config` 读取本地地址和 token 后，打开：
+
+```text
+<画布网页地址>/canvas?mode=new#agentUrl=<Local URL>&agentToken=<Connect token>
+```
+
+`mode=new` 会让网页自动创建具体画布并连接本地 Agent，不需要手动点击“新建画布”。

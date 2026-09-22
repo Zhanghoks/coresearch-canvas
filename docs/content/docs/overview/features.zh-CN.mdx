@@ -1,0 +1,60 @@
+---
+title: 功能介绍
+description: 当前项目已实现的主要功能
+---
+
+# 功能介绍
+
+本文档记录当前项目已经实现的主要功能。产品主线是 **研究工作流画布 + Agent**；文末「附属能力」中的多媒体生成来自分叉前 Infinite Canvas，运行时仍保留，但不作为主推入口。
+
+## 研究主流程
+
+- 九种研究节点：Seed、Direction、Research Question、Problem、Hypothesis、Approach、Method、Evaluation、Idea。
+- 底部工具栏「＋」、双击空白处创建菜单只暴露上述九种类型。
+- 每张研究卡片：类型标识、可编辑摘要（`summary`）、双击打开 Markdown 文档（`document`）。
+- 工作流边界由本地 `research_workflow_advance` 校验：探索只返回候选，用户确认后才 `commit` / `synthesize` 写画布。
+- 交互原则见 [研究交互思路](/docs/progress/research-interaction)。
+
+## 画布项目
+
+- 支持创建多个画布项目；重命名、删除、批量选择与删除。
+- 支持单个画布导出 / 导入 JSON。
+- 画布项目默认保存在仓库 `.data/users/<userId>/projects/`；可选 WebDAV 同步。登录账号后的云同步仍在演进中。
+
+## 无限画布
+
+- 拖动画布、滚轮缩放、缩放控件、重置视图、小地图。
+- 点阵 / 网格线 / 空白背景；浅色与深色主题。
+- 框选、多选、复制粘贴、撤销重做、节点连线与上下游高亮。
+
+## AI Agent
+
+- 右侧 Agent 面板：与选中节点及上下文对话，辅助梳理、比较与拓展；未确认内容不自动落盘。
+- 本地 Canvas Agent：侧边栏内嵌 Pi SDK。在 Agent Setup 填写提供商 API Key。Agent 指令和 Skill 落在仓库 `.coresearch/`，密钥、会话、日志和项目落在 `.data/`。画布写入仍需网页确认。Codex App 插件仍走 MCP（`canvas-agent mcp`）。
+- 托管 Agent API（可选）：Supabase 鉴权下的多用户 Project / Conversation 路径。
+- 研究节点 Skill 权威源在 `canvas-agent/skills/`；Codex 插件副本由同步脚本生成。
+
+## 研究 Artifact
+
+- 用户明确要求保存时，可通过 Artifact 工具写入不可变 Markdown 派生产物；列表与读取按当前 Canvas Project 隔离。
+
+## 配置
+
+- 浏览器本地配置 OpenAI 兼容 Base URL、API Key 与模型。
+- 可选本地 CORS 代理（`canvas-proxy`）转发第三方 AI 请求。
+- 可导出 / 导入渠道与偏好设置。
+
+## 附属能力（非主流程）
+
+以下能力仍可在画布内使用（上传、粘贴、素材库入口、生成配置节点等），但**不出现在**研究主流程创建入口：
+
+- 文本 / 图片 / 视频 / 音频节点与生成配置节点。
+- 我的素材库、图片裁剪 / 遮罩等编辑工具。
+- 远程节点插件系统（SDK 与示例插件）。
+- PDF / Web 等文献材料节点（Deep Dive 文献层会用到，但不进底部主流程工具栏）。
+
+## 当前限制
+
+- 前端优先：无完整云端研究 Domain 后端（无 revision / 服务端 Gate）。
+- API Key 存在浏览器本地，请求默认由前端直连配置的提供商。
+- Docker 静态资源路径等生产部署细节仍待更充分验证。

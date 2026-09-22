@@ -1,0 +1,125 @@
+---
+title: Research Interaction
+description: Interaction principles for this repo, aligned with CoResearch design
+---
+
+# Research Interaction
+
+This document compresses the CoResearch design (`research-flow.md`, `huabu-node-presentation-and-links.md`, `huabu-domain-binding.md`) into an interaction approach for this repository. When designs conflict, CoResearch Research Flow wins.
+
+This repo is still a browser-local plain JSON canvas with no versioned Research Domain backend. Do not fake revision, server Gates, automatic stale propagation, or Agent Node context snapshots.
+
+## 节点编写与交互契约
+
+当前采用统一卡片外壳：类型、标题、一个核心表述、实际可用的覆盖范围。完整论证进入默认阅读的 Markdown 文档；点击编辑才展示源码。空白章节允许保存，不用自动生成的文字补齐。卡片选中只是界面选择，不代表用户认可研究结论。
+
+| 节点 | 核心问题 | 必须区分 |
+| --- | --- | --- |
+| Seed | 我对什么感兴趣？ | 原话与 Agent 整理；不提前加入方法和贡献 |
+| Direction | 哪片研究空间值得探索？ | 范围、子方向、来源；保存与选择深入 |
+| Research Question | 具体想知道什么？ | 问题线索与经过核查的空白 |
+| Problem | 我决定研究什么困难？ | 来源 RQ、范围、已有方法不足与证据 |
+| Hypothesis | 什么机制产生什么可反驳预测？ | 主张、机制、预测、证伪条件 |
+| Approach | 总体用什么策略检验？ | 策略取舍与具体实施步骤 |
+| Method | 如何实施？ | 输入、过程、输出、对照；计划与实现 |
+| Evaluation | 什么结果支持或反驳主张？ | 指标与主张对应；计划与实际结果 |
+| Idea | 已选择对象形成什么研究？ | 综合引用与新的候选；保留未解决缺口 |
+
+前端契约入口为 `web/src/lib/canvas/research-node-contract.ts`，提供卡片引导、文档章节、下一阶段提示和三个快捷研究动作；Agent 的阶段行为由 `canvas-agent/skills/` 节点 Skill 仓库约束，总路由是 `research-flow`。节点动作只发送用户可见的简短意图，Agent 再读取当前画布与节点文档。
+
+`canvas-agent/src/canvas/research-workflow.ts` 是可独立测试的工作流边界，公开接口为 `advanceResearchWorkflow(snapshot, intent)`。`explore` 只返回当前节点专属提示词，不写画布；用户明确确认后，`commit` 才能按合法下一类型创建节点和连线；`synthesize` 必须同时引用已选择的 Problem、Hypothesis、Approach、Method、Evaluation。Approach 的下一步强制把 Method 与 Evaluation 作为一次联合设计提交。当前校验覆盖阶段、节点类型、确认文本和综合依赖，但还没有内容版本、语义关系审阅或服务端 Research Domain 权限。
+
+教程只创建 Seed 与说明。用户写完后显式点击探索动作，实际输入随节点文档发送给 Agent；失焦不触发研究或插入固定答案。
+
+### 后续状态与关系设计
+
+采用三个独立维度：用户决定（候选、保留、选定、舍弃）、证据评价（未核查、有范围的支持、存在争议、证据不足）、运行状态（运行中、完成、失败）。不能用一个 Selected 标记同时表示这三件事。界面只显示真实数据；来源数来自可解析引用，进度来自关联运行事件。
+
+确认文本与来源节点会写入新节点的 `metadata.researchWorkflow`。后续仍需让确认绑定不可变的具体内容版本；编辑后重新审阅，Agent 新建议作为候选保留，不覆盖已确认正文。Idea 引用多个已选择上游对象，Method 与 Evaluation 共同迭代。
+
+连线默认仅表达视觉关联。用户明确选择关系后才能标记 expands、narrows、supports、challenges、tests 或 synthesizes；Agent 建议的关系保持待审。移动或分组不创建研究事实。语义关系的端点和依据审阅、候选采纳与版本确认仍需单独实现。
+
+## 1. One-line principle
+
+> The Agent expands possibilities; the user confirms, keeps, and combines; the Canvas only stores research state the user has endorsed.
+
+It is not “the Agent invents an Idea for you,” and the canvas is not a mirror of chat.
+
+## 2. Two parallel channels
+
+| Channel | Role | May contain | Does not count as |
+|---|---|---|---|
+| Right-hand chat | Exploration Space | Candidate directions, temporary explanations, search, comparison | Endorsed research objects |
+| Canvas | Commitment Space | Objects and relations the user saved or created | Every Agent proposal |
+
+Rhythm:
+
+```text
+Candidates appear in conversation
+        ↓
+User keeps → create the matching research node on canvas
+User digs deeper → stay in chat
+User ignores → nothing written to canvas
+```
+
+## 3. Navigation (not a one-way wizard)
+
+```text
+Interest → Seed → Direction exploration → Deep Dive → Research Question
+    → Problem → Hypothesis → Approach → Method ↔ Evaluation
+    → Idea → Review ↺ literature refresh
+```
+
+- Seeds stay thin: topic understanding only, no Gap / Method / Novelty yet.
+- Direction candidates live in chat first; only kept ones enter the canvas.
+- Deep Dive targets the Direction the user chose, not a full-domain map upfront.
+
+## 4. Three canvas readings
+
+| Layer | Question | Typical nodes |
+|---|---|---|
+| Exploration | Where am I researching? | Seed, Direction, Papers, Questions |
+| Reasoning | What is the logic? | Problem, Hypothesis, Approach, Method, Evaluation |
+| Synthesis | What Idea do I have? | Idea, Review, Versions |
+
+Frames/groups organize views only. Dropping a paper into a Method group does not turn it into a Method.
+
+Toolbar, double-click create menu, and left filters expose only the nine research-flow node kinds.
+
+## 5. How nodes are read
+
+```text
+Identity   type, title, status accent
+Preview    one-line summary, tags, relation counts
+Detail     full body, sources, relations, actions
+```
+
+Click selects; double-click opens Detail. Do not grow cards forever to read full text.
+
+## 6. How links work
+
+Port drag or toolbar Connect → pick relation type when the domain exists. For now this repo may keep visual edges and type suggestions, but must not invent verified `supports` / `challenges` without evidence review.
+
+## 7. Agent vs canvas
+
+| Who | Does | Does not |
+|---|---|---|
+| Chat Agent | Explore, propose, explain, challenge | Silently commit unconfirmed candidates |
+| User | Confirm Seed, keep Directions, edit drafts | Let the system decide the research topic |
+| Canvas | Hold endorsed objects and layout | Auto-dump the whole conversation |
+
+Local Codex / hosted Pi: auto-discover when Canvas Agent is online; default to a blank new thread; restore history explicitly. Tool approval is not the same as confirming a research revision.
+
+## 8. Implementation order here
+
+1. Nine research node kinds, accents, editable summaries  
+2. Chat vs canvas boundary (no silent bulk commits)  
+3. Connect UX (visual edges + suggested types)  
+4. Detail surface  
+5. Deep Dive / Papers (see TODO)
+
+Deferred until a real Research Domain exists: revision / Confirm, evidenced relations, Agent Node versioned context.
+
+## 9. Sources
+
+Design tree (copy in this repo): `docs/design/` — start with `research-flow.md`, then `idea-formation/`, then `canvas/huabu-*.md`. Index: [`docs/design/README.md`](../../../design/README.md).

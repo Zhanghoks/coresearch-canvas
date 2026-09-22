@@ -37,7 +37,10 @@ services:
         max-file: "5"
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # 固定版本，不用 :latest —— agent-api 靠 sha- tag 做秒级回滚，如果 cloudflared 用 :latest，
+    # 回滚 agent-api 时 cloudflared 可能悄悄换了个新版本，两者就不再对应同一次验证过的组合。
+    # 升级时手动把这个 tag 提上去，同样走 git push 走一遍 CI/CD。
+    image: cloudflare/cloudflared:2026.9.1
     container_name: coresearch-cloudflared
     command: tunnel --config /etc/cloudflared/config.yml run
     network_mode: host
@@ -76,26 +79,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── agent-worker（预留，当前不可用）──────────────────────────────────────────
-  # 现在拆不出来，原因是设计事实而非取舍：
-  #   - CanvasBridge（agent-api/src/canvas-bridge.ts）用进程内 Map 保存待确认的画布工具调用，
-  #     靠浏览器 POST /canvas/tool-results/:requestId 来 resolve。跨进程后 canvas_apply_operations
-  #     和 canvas_read_snapshot 直接失效。
-  #   - EventHub（agent-api/src/event-hub.ts）的 SSE 订阅者也在进程内存里。
-  # 要拆必须先有共享事件通道（Redis pub/sub 或 Postgres LISTEN/NOTIFY）和 durable run state。
-  # 届时 worker 用同一个镜像、不同 command 即可，CI 无需改动：
-  #
-  # agent-worker:
-  #   image: ghcr.io/zhanghoks/coresearch-agent-api:${IMAGE_TAG:-main}
-  #   container_name: coresearch-agent-worker
-  #   command: ["node", "dist/worker.js"]
-  #   env_file:
-  #     - /srv/coresearch/env/production.env
-  #   environment:
-  #     AGENT_ROLE: worker
-  #   network_mode: host
-  #   volumes:
-  #     - /srv/coresearch/data/pi:/var/lib/research-canvas/pi
-  #     - /srv/coresearch/data/runtime:/srv/coresearch/runtime
-  #   restart: unless-stopped
-  #   profiles: ["worker"]
+  # agent-worker 预留方案（现在拆不出来，原因和未来落地方式）完整写在
+  # deploy/production/README.md「已知边界 §3」，不在这里放一份注释代码——
+  # 这段 YAML 永远不会真的被取消注释就直接可用（还缺共享事件通道和 durable run state），
+  # 放在这里只是文档，属于 dead code，交给 README 说清楚就够了。

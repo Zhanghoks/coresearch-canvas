@@ -12,10 +12,15 @@ Production has two public entries. The browser talks to the web app and `agent-a
 | `coresearch.xxx.com` | `web/` on Vercel |
 | `api.coresearch.xxx.com` | Cloudflare Tunnel → `127.0.0.1:4100` on your server |
 
-[`docker-compose.prod.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/docker-compose.prod.yml) runs two containers:
+[`deploy/production/docker-compose.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/production/docker-compose.yml) runs:
 
 - `agent-api` validates Supabase JWTs, runs Pi, and writes Postgres. It listens on loopback port 4100.
-- `app` is a backup static frontend on loopback port 3000. Do not point the primary hostname at it.
+- `cloudflared` terminates the Tunnel that maps `api.coresearch.xxx.com` to loopback 4100.
+- `app` (optional, off by default) is a backup static frontend on loopback port 3000. Do not point the primary hostname at it. Enable it with `COMPOSE_PROFILES=app`.
+
+<Callout type="info">
+This page documents the **manual** path, which is what you need for first-time setup and troubleshooting. Day-to-day deploys are automated: pushing to `main` deploys the frontend through Vercel and the backend through GitHub Actions, with no SSH. See [`deploy/production/README.md`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/production/README.md) for the pipeline, GitHub Secrets, and rollback.
+</Callout>
 
 Pi sessions, in-flight tool confirmations, and SSE live in that one `agent-api` process. Run a single replica. Do not start a second one until sticky routing exists.
 
@@ -61,20 +66,30 @@ Edit `agent-api/.env`:
 | `PI_AGENT_DIR` | `/var/lib/research-canvas/pi` |
 | `PORT` | `4100` |
 
+Full variable reference (including what breaks when a value is missing or wrong) lives in [`deploy/ENV.md`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/ENV.md); this table only has the minimum to get this step working.
+
 Leave `AGENT_RUNTIME` unset. The default runtime is Pi.
 
-The backup frontend reads public values from the host shell and writes them into `config.js` at container start. Export them, then build:
+Put these values in `/srv/coresearch/env/production.env` (`chmod 600`), using [`deploy/production/production.env.example`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/production/production.env.example) as the template. Production secrets live only in that file — never in Git, the image, the compose file, or GitHub Secrets.
+
+Then start it:
+
+```bash
+IMAGE_TAG=main /srv/coresearch/app/deploy.sh
+```
+
+`deploy.sh` only runs `docker compose pull`, `up -d`, and a `/health` poll. It **never builds on the production host** — images come from GHCR, built by GitHub Actions.
+
+To also run the optional backup frontend:
 
 ```bash
 export SUPABASE_URL=https://your-project.supabase.co
 export SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 export AGENT_API_URL=https://api.coresearch.xxx.com
-docker compose -f docker-compose.prod.yml up -d --build
+COMPOSE_PROFILES=app IMAGE_TAG=main /srv/coresearch/app/deploy.sh
 ```
 
 `AGENT_API_URL` must be the public API origin. The browser runs on the user's machine, so `localhost` would point at that machine.
-
-Until GHCR has a `coresearch-agent-api` image, keep `--build`. After a version tag, [Agent API Docker image](https://github.com/Zhanghoks/Research-canvas/blob/main/.github/workflows/agent-api-docker-image.yml) publishes it.
 
 Check the loopback health endpoint, and leave the public ports closed:
 
@@ -138,6 +153,8 @@ Import this repository. The root [`vercel.json`](https://github.com/Zhanghoks/Re
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key |
 | `VITE_AGENT_API_URL` | `https://api.coresearch.xxx.com` |
 
+Full variable reference: [`deploy/ENV.md`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/ENV.md).
+
 Do not set `SUPABASE_SECRET_KEY` or `PI_API_KEY` on Vercel. These three values are baked in at build time, so redeploy after changing them.
 
 Add `coresearch.xxx.com` in Vercel and create the CNAME Cloudflare shows for that project.
@@ -172,9 +189,20 @@ Then, in the browser:
 
 ## Upgrade and backup
 
+Routine upgrades need no manual step: pushing to `main` makes GitHub Actions run typecheck and tests, build and push the image to GHCR, trigger `deploy.sh` over SSH, and finally assert that the `version` returned by `/health` is this commit.
+
+To upgrade or roll back by hand:
+
 ```bash
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
+IMAGE_TAG=sha-<commit> /srv/coresearch/app/deploy.sh
 ```
 
-An upgrade drops open SSE connections. Postgres backups stay with Supabase. Pi session files live in the `pi-agent-data` volume; confirm the volume name with `docker volume ls` before archiving it. Keep the secret key and `PI_API_KEY` out of centralized logs.
+An upgrade drops open SSE connections **and interrupts in-flight Agent runs**. On startup agent-api reconciles them: any run left at `status='running'` is marked `failed` and gets a `run.failed` event so the frontend terminates cleanly — but that turn's conversation content is lost.
+
+Postgres backups stay with Supabase. Pi session files live in the bind mount `/srv/coresearch/data/pi` and can be archived directly on the host:
+
+```bash
+sudo tar czf /srv/coresearch/logs/data-$(date +%F).tar.gz -C /srv/coresearch data
+```
+
+Keep the secret key and `PI_API_KEY` out of centralized logs.

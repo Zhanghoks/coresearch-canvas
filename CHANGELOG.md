@@ -1,5 +1,13 @@
 # CHANGELOG
 
++ [新增] GitHub Actions 自动化部署 agent-api：push main 后依次 typecheck/test、构建镜像推 GHCR、SSH 部署到服务器 Docker Compose、公网 health 校验部署版本与本次 commit 一致，失败自动停止在当前阶段。
+
++ [新增] `/health` 返回构建时注入的 `GIT_SHA`/`APP_VERSION`，用于确认线上实际运行的代码版本。
+
++ [修复] agent-api 启动时 reconcile 残留在 `running` 状态的 run 并标记为 `failed`，修复容器重建后因 `one_active_run_per_conversation` 唯一索引导致 Conversation 永久无法发起新 turn 的问题。
+
++ [调整] agent-api typecheck 存量错误清零（47 → 0），纳入部署流水线作为真实 gate。
+
 + [修复] Agent 会话被服务端换成新版本后，发送不再叠出两张「会话已同步」提示，会采用新会话并自动重试一次。
 
 + [调整] 侧栏 Agent 去掉权限审查：输入框不再切换请求批准或自动审查，bash 与改文件直接执行。

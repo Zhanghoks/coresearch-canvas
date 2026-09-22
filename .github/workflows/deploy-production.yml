@@ -32,28 +32,7 @@ env:
 
 jobs:
   ci:
-    name: typecheck + test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.19"
-          cache: npm
-          cache-dependency-path: agent-api/package-lock.json
-
-      - name: Install
-        working-directory: agent-api
-        run: npm ci
-
-      - name: Typecheck
-        working-directory: agent-api
-        run: npm run typecheck
-
-      - name: Test
-        working-directory: agent-api
-        run: npm test
+    uses: ./.github/workflows/agent-api-ci.yml
 
   image:
     name: 构建并推送镜像
@@ -123,7 +102,10 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -p "${SERVER_SSH_PORT:-22}" -H "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "${SERVER_SSH_PORT:-22}" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          # keyscan 静默失败时 known_hosts 拿不到目标主机指纹，后面的 scp/ssh 会报一个
+          # 不相关的连接错误，排查时容易被引导去查 SSH key 而不是这里。提前在这一步就 fail。
+          grep -q "$SERVER_HOST" ~/.ssh/known_hosts || { echo "::error::ssh-keyscan 没有拿到 $SERVER_HOST 的指纹，检查 SERVER_HOST/SERVER_SSH_PORT 是否正确、服务器 SSH 是否可达"; exit 1; }
 
       - name: 同步部署文件到服务器
         env:
@@ -151,15 +133,20 @@ jobs:
             "IMAGE_TAG='$IMAGE_TAG' /srv/coresearch/app/deploy.sh"
 
       - name: 公网 health 校验
-        if: vars.API_PUBLIC_URL != ''
         env:
           API_PUBLIC_URL: ${{ vars.API_PUBLIC_URL }}
           EXPECTED_SHA: ${{ github.sha }}
           IMAGE_TAG: ${{ steps.tag.outputs.value }}
         # deploy.sh 已经在服务器本机验过 /health；这一步额外验证 Cloudflare Tunnel 通路，
         # 并断言返回的 version 就是本次部署的 commit —— 只看 200 无法证明新代码真的起来了。
+        # 这是唯一能证明"新代码真的对外可用"的断言，缺 API_PUBLIC_URL 时必须直接 fail，
+        # 不能静默跳过——否则部署可能已经在悄悄跑旧镜像，而流水线仍然显示全绿。
         run: |
           set -euo pipefail
+          if [ -z "$API_PUBLIC_URL" ]; then
+            echo "::error::未配置 GitHub Variable API_PUBLIC_URL，无法校验公网 health，部署视为失败。在仓库 Settings → Secrets and variables → Actions → Variables 里补上它（见 deploy/ENV.md）"
+            exit 1
+          fi
           body="$(curl --fail --silent --show-error --max-time 15 --retry 5 --retry-delay 3 --retry-all-errors "$API_PUBLIC_URL/health")"
           echo "health: $body"
           echo "公网 health: \`$body\`" >> "$GITHUB_STEP_SUMMARY"

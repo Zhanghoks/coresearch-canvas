@@ -18,31 +18,7 @@ concurrency:
 
 jobs:
   agent-api:
-    name: agent-api typecheck + test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          # 与 agent-api/package.json engines 和 agent-api/Dockerfile 的 node:22.19-alpine 一致。
-          node-version: "22.19"
-          cache: npm
-          cache-dependency-path: agent-api/package-lock.json
-
-      - name: Install
-        working-directory: agent-api
-        run: npm ci
-
-      - name: Typecheck
-        working-directory: agent-api
-        run: npm run typecheck
-
-      - name: Test
-        working-directory: agent-api
-        # 依赖真实 Supabase 的 RLS 集成用例通过 RUN_SUPABASE_RLS_TESTS 自检跳过，
-        # 这里不设该变量，CI 不会写任何 Supabase 项目。
-        run: npm test
+    uses: ./.github/workflows/agent-api-ci.yml
 
   web:
     name: web typecheck + build

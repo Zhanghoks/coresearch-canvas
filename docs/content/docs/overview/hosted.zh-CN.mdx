@@ -12,10 +12,15 @@ description: 在自有服务器上部署 Pi Agent API，前端走 Vercel，API �
 | `coresearch.xxx.com` | Vercel 上的 `web/` |
 | `api.coresearch.xxx.com` | Cloudflare Tunnel → 服务器 `127.0.0.1:4100` |
 
-服务器上用 [`docker-compose.prod.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/docker-compose.prod.yml) 跑两个容器：
+服务器上用 [`deploy/production/docker-compose.yml`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/production/docker-compose.yml) 跑：
 
 - `agent-api`：校验 Supabase JWT，跑 Pi，写 Postgres。只监听回环 4100。
-- `app`：备用静态前端，只监听回环 3000。主站不要指到这个容器。
+- `cloudflared`：Tunnel，把 `api.coresearch.xxx.com` 接到回环 4100。
+- `app`（可选，默认关闭）：备用静态前端，只监听回环 3000。主站不要指到这个容器。用 `COMPOSE_PROFILES=app` 启用。
+
+<Callout type="info">
+本页描述的是**手工**部署流程，适合首次搭建和排查。日常部署已经自动化：push 到 `main` 之后 Vercel 部署前端、GitHub Actions 部署后端，不需要 SSH。完整的自动化流程、GitHub Secrets 配置、回滚方法见 [`deploy/production/README.md`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/production/README.md)。
+</Callout>
 
 Pi 会话、进行中的工具确认和 SSE 都在这一个 `agent-api` 进程里。只跑一个副本。横向扩容前不要起第二个。
 
@@ -61,20 +66,30 @@ cp agent-api/.env.production.example agent-api/.env
 | `PI_AGENT_DIR` | `/var/lib/research-canvas/pi` |
 | `PORT` | `4100` |
 
+完整变量清单（含每个变量缺失/错误时的现象）以 [`deploy/ENV.md`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/ENV.md) 为准，这里只列最少够跑通这一步的几个。
+
 不要设置 `AGENT_RUNTIME`。默认就是 Pi。
 
-备用前端在启动时读取宿主机环境变量，写入容器里的 `config.js`。在同一台 shell 里导出公开值，然后构建启动：
+把这些值写进 `/srv/coresearch/env/production.env`（`chmod 600`），模板见 [`deploy/production/production.env.example`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/production/production.env.example)。生产密钥只存在于这个文件里：不进 Git、不进镜像、不进 compose、不进 GitHub Secrets。
+
+然后启动：
+
+```bash
+IMAGE_TAG=main /srv/coresearch/app/deploy.sh
+```
+
+`deploy.sh` 只做 `docker compose pull` + `up -d` + `/health` 轮询，**不在生产机上构建镜像**。镜像由 GitHub Actions 推到 GHCR。
+
+要同时启用备用前端容器（默认关闭）：
 
 ```bash
 export SUPABASE_URL=https://your-project.supabase.co
 export SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 export AGENT_API_URL=https://api.coresearch.xxx.com
-docker compose -f docker-compose.prod.yml up -d --build
+COMPOSE_PROFILES=app IMAGE_TAG=main /srv/coresearch/app/deploy.sh
 ```
 
 `AGENT_API_URL` 必须是公网 API 地址。浏览器在用户机器上执行，填 `localhost` 会连到用户自己的电脑。
-
-GHCR 上还没有 `coresearch-agent-api` 镜像时，必须带 `--build`。打版本 tag 后，[Agent API Docker image](https://github.com/Zhanghoks/Research-canvas/blob/main/.github/workflows/agent-api-docker-image.yml) 会发布该镜像。
 
 确认本机健康检查，并确认公网端口没有打开：
 
@@ -138,6 +153,8 @@ curl -sS https://api.coresearch.xxx.com/health
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key |
 | `VITE_AGENT_API_URL` | `https://api.coresearch.xxx.com` |
 
+完整变量清单见 [`deploy/ENV.md`](https://github.com/Zhanghoks/Research-canvas/blob/main/deploy/ENV.md)。
+
 不要在 Vercel 配置 `SUPABASE_SECRET_KEY` 或 `PI_API_KEY`。改环境变量后重新部署，这三个值在构建时写入前端。
 
 把 `coresearch.xxx.com` 加为 Vercel 域名，并在 Cloudflare DNS 按 Vercel 给出的记录做 CNAME。
@@ -172,9 +189,20 @@ AGENT_API_URL=https://api.coresearch.xxx.com npm run acceptance:live
 
 ## 升级与备份
 
+日常升级不需要手工操作：push 到 `main` 之后，GitHub Actions 会跑 typecheck 和 test、构建镜像推到 GHCR、SSH 触发服务器上的 `deploy.sh`，最后校验 `/health` 返回的 `version` 是否就是本次 commit。
+
+需要手工升级或回滚时：
+
 ```bash
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
+IMAGE_TAG=sha-<commit> /srv/coresearch/app/deploy.sh
 ```
 
-升级会断开正在进行的 SSE。Postgres 用 Supabase 自己的备份。Pi 会话文件在 volume `pi-agent-data` 里，升级前用 `docker volume ls` 确认卷名再打包。Secret key 和 `PI_API_KEY` 不要写入集中日志。
+升级会断开正在进行的 SSE，**并且会中断正在跑的 Agent run**。agent-api 启动时会 reconcile：把残留在 `status='running'` 的 run 标记为 `failed` 并补发 `run.failed` 事件，前端能正常收尾，但那一轮对话内容会丢失。
+
+Postgres 用 Supabase 自己的备份。Pi 会话文件在 bind mount `/srv/coresearch/data/pi` 里，直接在宿主机上打包即可：
+
+```bash
+sudo tar czf /srv/coresearch/logs/data-$(date +%F).tar.gz -C /srv/coresearch data
+```
+
+Secret key 和 `PI_API_KEY` 不要写入集中日志。

@@ -29,6 +29,20 @@ fail() {
 [ -f "$APP_DIR/docker-compose.yml" ] || fail "找不到 $APP_DIR/docker-compose.yml"
 [ -f "$ENV_FILE" ] || fail "找不到环境变量文件 $ENV_FILE（生产密钥只存在于服务器上，不来自 Git）"
 
+# app profile（备用静态前端）依赖 SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY / AGENT_API_URL
+# 从 shell 环境注入到 compose；compose 里用 ${VAR:-} 兜底是为了消除"变量未设置"的警告，
+# 代价是三个值任一忘记 export 时会静默变成空字符串——前端会悄悄退回本地模式，不会报错。
+# 这里提前显式校验，缺一个就直接 fail，而不是让它在浏览器里才被发现。
+case ",${COMPOSE_PROFILES:-}," in
+    *,app,*)
+        missing=""
+        [ -n "${SUPABASE_URL:-}" ] || missing="$missing SUPABASE_URL"
+        [ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ] || missing="$missing SUPABASE_PUBLISHABLE_KEY"
+        [ -n "${AGENT_API_URL:-}" ] || missing="$missing AGENT_API_URL"
+        [ -z "$missing" ] || fail "COMPOSE_PROFILES 包含 app，但以下变量没有 export：$missing"
+        ;;
+esac
+
 cd "$APP_DIR"
 
 log "目标镜像 tag：$IMAGE_TAG"

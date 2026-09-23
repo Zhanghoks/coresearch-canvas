@@ -18,6 +18,13 @@ CLOUDFLARED_VERSION=2026.9.1
 
 log() { printf '[install] %s\n' "$*"; }
 
+# 这台机器访问 github.com 时好时坏：先完整下载到临时文件（带重试）再解包，避免管道里半截数据。
+download() {
+    curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o "$2" "$1"
+}
+dl="$(mktemp -d)"
+trap 'rm -rf "$dl"' EXIT
+
 mkdir -p "$CORESEARCH_HOME"/{runtime,bin,releases,state,data/pi,secrets/cloudflared,pm2}
 # /root/data 是多租户共享存储（777），本目录里有密钥，只允许 root 访问。
 chmod 700 "$CORESEARCH_HOME"
@@ -32,8 +39,8 @@ chmod 600 "$CORESEARCH_HOME/secrets/agent-api.env"
 node_dir="$CORESEARCH_HOME/runtime/node-v$NODE_VERSION-linux-x64"
 if [ ! -x "$node_dir/bin/node" ]; then
     log "安装 Node $NODE_VERSION"
-    curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" |
-        tar -xJ -C "$CORESEARCH_HOME/runtime"
+    download "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" "$dl/node.tar.xz"
+    tar -xJf "$dl/node.tar.xz" -C "$CORESEARCH_HOME/runtime"
 fi
 ln -sfn "$node_dir" "$CORESEARCH_HOME/runtime/node"
 export PATH="$CORESEARCH_HOME/runtime/node/bin:$CORESEARCH_HOME/bin:$PATH"
@@ -46,21 +53,24 @@ fi
 
 if [ "$("$CORESEARCH_HOME/bin/oras" version 2>/dev/null | awk '/^Version:/{print $2}')" != "$ORAS_VERSION" ]; then
     log "安装 oras $ORAS_VERSION"
-    curl -fsSL "https://github.com/oras-project/oras/releases/download/v$ORAS_VERSION/oras_${ORAS_VERSION}_linux_amd64.tar.gz" |
-        tar -xz -C "$CORESEARCH_HOME/bin" oras
+    download "https://github.com/oras-project/oras/releases/download/v$ORAS_VERSION/oras_${ORAS_VERSION}_linux_amd64.tar.gz" "$dl/oras.tar.gz"
+    tar -xzf "$dl/oras.tar.gz" -C "$CORESEARCH_HOME/bin" oras
 fi
 
 if ! "$CORESEARCH_HOME/bin/cloudflared" --version 2>/dev/null | grep -q "$CLOUDFLARED_VERSION"; then
     log "安装 cloudflared $CLOUDFLARED_VERSION"
-    curl -fsSL -o "$CORESEARCH_HOME/bin/cloudflared" \
-        "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-amd64"
-    chmod 755 "$CORESEARCH_HOME/bin/cloudflared"
+    # Tunnel 不影响 agent-api 本身启动：下载失败只告警，重跑 install.sh 会补装。
+    if download "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-amd64" "$dl/cloudflared"; then
+        install -m 755 "$dl/cloudflared" "$CORESEARCH_HOME/bin/cloudflared"
+    else
+        log "警告：cloudflared 下载失败，稍后重新执行 install.sh 补装"
+    fi
 fi
 
 # 运维脚本随 bundle 发布：先拉一次目标版本（默认 :main），取出 ops/ 装到 bin/，再用它正式部署。
 ref="${1:-main}"
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+tmp="$dl/bundle"
+mkdir -p "$tmp"
 (cd "$tmp" && "$CORESEARCH_HOME/bin/oras" pull --no-tty "$BUNDLE_REPO:$ref" >/dev/null)
 tar -xzf "$tmp/agent-api.tar.gz" -C "$tmp" ./ops ./VERSION
 install -m 755 "$tmp/ops/"*.sh "$CORESEARCH_HOME/bin/"

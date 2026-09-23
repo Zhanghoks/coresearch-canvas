@@ -20,13 +20,7 @@ cp "$root/agent-api/package.json" "$root/agent-api/package-lock.json" "$root/age
 cp -r "$root/agent-api/src" "$work/src"
 (cd "$work" && npm ci --no-fund --no-audit && npm run build && npm prune --omit=dev --no-fund --no-audit)
 
-# pi-coding-agent 的依赖里带着所有平台的原生二进制（esbuild 二十多个平台约 280MB、clipboard、pi-tui），
-# 运行包只在 linux-x64 上跑，其余删掉；否则 bundle 体积大，生产机从 GHCR 拉取经常超时。
-nm="$work/node_modules"
-find "$nm" -regextype posix-extended -type d -regex '.*/node_modules/@esbuild/[^/]+' ! -name linux-x64 -prune -exec rm -rf {} +
-find "$nm" -regextype posix-extended -type d -regex '.*/node_modules/@mariozechner/clipboard-[^/]+' ! -name clipboard-linux-x64-gnu -prune -exec rm -rf {} +
-find "$nm" -regextype posix-extended -type d -regex '.*/pi-tui/native/(darwin|win32)' -prune -exec rm -rf {} +
-# 删完确认运行时依赖仍能加载。
+# 确认生产依赖（npm prune 之后）仍能加载 Pi SDK，坏包在 CI 就失败，不留到服务器上。
 (cd "$work" && node --input-type=module -e 'await import("@earendil-works/pi-coding-agent"); await import("@earendil-works/pi-ai/compat"); console.log("runtime deps load ok")')
 
 stage="$work/bundle"

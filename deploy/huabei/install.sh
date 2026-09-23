@@ -11,7 +11,6 @@ set -euo pipefail
 
 CORESEARCH_HOME="${CORESEARCH_HOME:-/root/data/zmj/coresearch}"
 BUNDLE_REPO="${BUNDLE_REPO:-ghcr.io/zhanghoks/coresearch-agent-api-bundle}"
-TOOLS_REPO="${TOOLS_REPO:-ghcr.io/zhanghoks/coresearch-tools}"
 NODE_VERSION=22.19.0
 PM2_VERSION=7.0.4
 ORAS_VERSION=1.3.4
@@ -60,10 +59,11 @@ fi
 
 if ! "$CORESEARCH_HOME/bin/cloudflared" --version 2>/dev/null | grep -q "$CLOUDFLARED_VERSION"; then
     log "安装 cloudflared $CLOUDFLARED_VERSION"
-    # 从 GHCR 镜像拉取（CI 负责从官方 release 同步，见 deploy-production.yml），github.com 在这台机器上太慢。
+    # 用 Cloudflare 官方 apt 仓库的 .deb（这台机器访问 github.com release 极慢，pkg.cloudflare.com 很快），只取出二进制。
     # Tunnel 不影响 agent-api 本身启动：失败只告警，重跑 install.sh 会补装。
-    if (cd "$dl" && "$CORESEARCH_HOME/bin/oras" pull --no-tty "$TOOLS_REPO:cloudflared-$CLOUDFLARED_VERSION" >/dev/null); then
-        install -m 755 "$dl/cloudflared" "$CORESEARCH_HOME/bin/cloudflared"
+    if download "https://pkg.cloudflare.com/cloudflared/pool/main/c/cloudflared/cloudflared_${CLOUDFLARED_VERSION}_amd64.deb" "$dl/cloudflared.deb" &&
+        dpkg-deb -x "$dl/cloudflared.deb" "$dl/cloudflared-deb"; then
+        install -m 755 "$dl/cloudflared-deb/usr/bin/cloudflared" "$CORESEARCH_HOME/bin/cloudflared"
     else
         log "警告：cloudflared 下载失败，稍后重新执行 install.sh 补装"
     fi

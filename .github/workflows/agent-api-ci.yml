@@ -30,6 +30,6 @@ jobs:
 
       - name: Test
         working-directory: agent-api
-        # 依赖真实 Supabase 的 RLS 集成用例通过 RUN_SUPABASE_RLS_TESTS 自检跳过，
-        # 这里不设该变量，CI 不会写任何 Supabase 项目。
+        # 依赖真实 Postgres 的用例（store 契约的 supabase 分支、RLS）在没有 SUPABASE_TEST_URL 时跳过，
+        # 它们由 agent-api-db.yml 在一次性的本地 Supabase 上跑，不写任何远端项目。
         run: npm test

@@ -20,6 +20,9 @@ jobs:
   agent-api:
     uses: ./.github/workflows/agent-api-ci.yml
 
+  agent-api-db:
+    uses: ./.github/workflows/agent-api-db.yml
+
   web:
     name: web typecheck + build
     runs-on: ubuntu-latest

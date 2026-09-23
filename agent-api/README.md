@@ -89,10 +89,11 @@ Conversation session 和事件已持久化到 Postgres，可以跨实例恢复�
 
 ## 验收
 
-`src/domain.test.ts` 与 `src/codex-runtime.test.ts` 覆盖 owner 隔离、Project/Workspace 唯一绑定、伪造上下文、session revision、Conversation 运行互斥，以及 Codex Runtime 的 token、目录隔离、thread 绑定和产品事件映射。常规 `npm test` 会跳过依赖外部 Supabase 的集成用例；应用 migration 后可显式运行真实 RLS 验收：
+`src/domain.test.ts` 与 `src/codex-runtime.test.ts` 覆盖 owner 隔离、Project/Workspace 唯一绑定、伪造上下文、session revision、Conversation 运行互斥，以及 Codex Runtime 的 token、目录隔离、thread 绑定和产品事件映射。`src/store.contract.test.ts` 让同一套场景同时跑内存实现与真实 Postgres。常规 `npm test` 只跑内存那一半；依赖真实数据库的一半（契约 + RLS 隔离）在本地一次性 Supabase 上跑，CI 由 `.github/workflows/agent-api-db.yml` 执行同样步骤：
 
 ```bash
-RUN_SUPABASE_RLS_TESTS=1 npm test
+supabase start          # 仓库根目录，需要 Docker
+npm run test:db         # 在 agent-api/ 下执行；拒绝指向生产库
 ```
 
 启动配置了真实模型的 Agent API 后，可从 `agent-api/` 执行协议级闭环验收。该脚本使用内置 test 账号，验证真实 Pi 流式回复、只读工具、模拟浏览器确认的写工具、session 持久化、事件序号、abort 和持久化数据中的凭据泄漏：

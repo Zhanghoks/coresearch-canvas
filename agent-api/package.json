@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
     "acceptance:live": "tsx src/live-acceptance.ts",
-    "invite:create": "tsx scripts/create-invite.ts"
+    "invite:create": "tsx scripts/create-invite.ts",
+    "test:db": "scripts/test-db.sh"
   },
   "engines": {
     "node": ">=22.19.0"

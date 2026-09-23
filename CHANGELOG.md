@@ -1,5 +1,9 @@
 # CHANGELOG
 
++ [新增] 数据库改动在真实 Postgres 上验证：CI 启动一次性本地 Supabase，从零应用全部 migration、跑 schema lint、store 契约测试（内存实现与 Supabase 同一套场景）和 RLS 隔离测试；生产部署的 migration 依赖它通过。本地用 `supabase start` + `npm run test:db` 跑同样的检查。
+
++ [修复] 重复创建研究关系不再误报「当前对话已有任务正在运行」，改为返回已有关系；自指关系返回 400 而不是 500。
+
 + [调整] 生产后端改为适配 ebcloud 容器实例（无 Docker/systemd、入站 SSH 不稳定）：CI 构建 agent-api 运行包按 `sha-<commit>` 推到 GHCR 并移动 `:main`，服务器 updater 主动拉取、pm2 运行，本机 health 失败自动回退；运行时、数据、密钥全部放在持久盘 `/root/data/zmj/coresearch`，服务器上不再有源码。回滚改为把 `:main` 指回旧版本。
 
 + [新增] 数据库 migration 纳入 CI：迁到仓库根 `supabase/migrations/`（Supabase CLI 布局），部署时先 `supabase db push` 再发布后端；文件版本号与生产库执行记录逐条对齐（含早期草案 schema 的 4 条），开启后无需补登记。

@@ -1,0 +1,43 @@
+name: agent-api database tests
+
+# 在一次性的本地 Supabase（Docker）上：应用全部 migration → schema lint → store 契约测试 + RLS 隔离测试。
+# 被 ci.yml 和 deploy-production.yml 复用；部署时 migrate 依赖它，没在副本上跑通的 migration 不会推到生产库。
+
+on:
+  workflow_call:
+
+jobs:
+  db:
+    name: migrations + store 契约 + RLS（本地 Supabase）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.117.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+          cache: npm
+          cache-dependency-path: agent-api/package-lock.json
+
+      - name: 启动本地 Supabase 并应用 migration
+        # 只启动测试用得到的服务；migration 依赖 storage 与 realtime 的 schema，所以保留它们。
+        run: supabase start -x studio,imgproxy,mailpit,edge-runtime,logflare,vector,supavisor,postgres-meta
+
+      - name: Schema lint
+        run: supabase db lint --local --fail-on error
+
+      - name: 安装依赖
+        working-directory: agent-api
+        run: npm ci
+
+      - name: store 契约 + RLS 测试
+        working-directory: agent-api
+        run: npm run test:db
+
+      - name: 停止本地 Supabase
+        if: always()
+        run: supabase stop --no-backup

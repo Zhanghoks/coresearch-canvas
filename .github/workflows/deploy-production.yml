@@ -16,6 +16,7 @@ on:
       - "VERSION"
       - ".github/workflows/deploy-production.yml"
       - ".github/workflows/agent-api-ci.yml"
+      - ".github/workflows/agent-api-db.yml"
   workflow_dispatch:
     inputs:
       rollback_tag:
@@ -42,9 +43,14 @@ jobs:
     if: inputs.rollback_tag == ''
     uses: ./.github/workflows/agent-api-ci.yml
 
+  db:
+    if: inputs.rollback_tag == ''
+    uses: ./.github/workflows/agent-api-db.yml
+
   migrate:
     name: 数据库 migration
-    needs: ci
+    # migration 必须先在一次性本地 Supabase 上应用并通过契约/RLS 测试，才会推到生产库。
+    needs: [ci, db]
     runs-on: ubuntu-latest
     environment: production
     steps:

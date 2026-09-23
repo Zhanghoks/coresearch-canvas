@@ -176,8 +176,8 @@ Do not advertise the built-in `test` account. It exists for protocol checks only
 ## 6. Verification
 
 ```bash
-cd agent-api
-RUN_SUPABASE_RLS_TESTS=1 npm test
+supabase start                      # repo root, throwaway local database, needs Docker
+cd agent-api && npm run test:db     # store contract + RLS isolation; refuses the production project
 AGENT_API_URL=https://api.coresearch.xxx.com npm run acceptance:live
 ```
 

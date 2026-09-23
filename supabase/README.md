@@ -70,9 +70,19 @@ migration 必须**先于**依赖它的代码上线。CI 已经保证了这一点
 - 用 `supabase migration new <描述>` 生成文件，版本号是时间戳，不要手写或复用。
 - 新建对象一律加 `if not exists`，policy 用 `drop policy if exists ... ; create policy ...`，让重复执行至少不报错。
 - 新表必须 `enable row level security` 并显式写 policy。本项目所有用户数据表都靠 RLS 做租户隔离，漏掉等于对所有登录用户开放。
-- 改完之后跑一次真实 RLS 验收（**不要指向生产项目**，它会创建和删除测试用户）：
+- 改完之后在本地一次性 Supabase 上验证（需要 Docker），CI 的 `agent-api-db.yml` 也跑同样的步骤：
 
   ```bash
-  cd agent-api
-  RUN_SUPABASE_RLS_TESTS=1 npm test
+  supabase start                      # 仓库根目录；从零应用全部 migration
+  supabase db lint --local --fail-on error
+  cd agent-api && npm run test:db     # store 契约（内存 + 真实 Postgres）+ RLS 隔离
   ```
+
+  测试会创建和删除用户。`agent-api/src/testing/store-harness.ts` 拒绝指向生产 ref，**不要**把 `SUPABASE_TEST_URL` 设成生产库。
+
+## 数据访问规则（写代码前先读）
+
+- **有列级 UPDATE grant 的表禁止用 `.upsert()`。** PostgREST 的 upsert 生成 `INSERT … ON CONFLICT DO UPDATE SET <所有传入列>`，Postgres 按 `SET` 列校验权限；只要传入了未授权的列（通常是 `project_id`），连首次插入都会 42501。改用「先 update、没命中再 insert、撞 23505 再 update」，参考 `agent-api/src/supabase-store.ts` 的 `saveSkill`。当前有列级 grant 的表：
+  `agent_runs` `canvas_edges` `canvas_nodes` `canvas_viewport` `canvas_workspaces` `conversations` `paper_readings` `paper_workspaces` `project_papers` `project_skills` `projects` `research_entities` `research_entity_revisions` `research_group_members` `research_groups` `sessions`。
+- **新行为先写进契约测试。** `agent-api/src/store.contract.test.ts` 同一套场景同时跑 `InMemoryResearchStore` 和 `SupabaseResearchStore`；只改了其中一边的行为，另一边会在 CI 里失败。
+- **Advisor 已知例外：** `create_project_with_canvas` 是 `SECURITY DEFINER` 且对 `authenticated` 可执行——这是有意的（它要在一个事务里同时建 project 和唯一的 canvas_workspace），函数内部校验 `auth.uid()` 并把 owner 固定为调用者，`search_path` 为空。`invite_codes` 开了 RLS 但没有 policy 也是有意的：只允许 service role 访问。

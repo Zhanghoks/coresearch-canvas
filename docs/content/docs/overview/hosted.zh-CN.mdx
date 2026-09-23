@@ -176,8 +176,8 @@ npm run invite:create
 ## 6. 验收
 
 ```bash
-cd agent-api
-RUN_SUPABASE_RLS_TESTS=1 npm test
+supabase start                      # 仓库根目录，一次性本地库，需要 Docker
+cd agent-api && npm run test:db     # store 契约 + RLS 隔离，拒绝指向生产库
 AGENT_API_URL=https://api.coresearch.xxx.com npm run acceptance:live
 ```
 

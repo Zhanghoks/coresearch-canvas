@@ -33,7 +33,7 @@ AGENT_RUNTIME_TOKEN_SECRET
 
 这些是平台基础设施凭据，不能使用 `VITE_` 前缀，不能写入用户目录或返回浏览器。每个 `User × Project` 会在 `AGENT_RUNTIME_ROOT/users/<userId>/projects/<projectKey>/` 下建立互相隔离的 `workspace/` 与 `codex-home/`。
 
-Agent API 启动时会幂等创建并确认内置测试用户：账号 `test`，密码 `12345678`（Supabase 内部邮箱为 `test@research-canvas.test`），只供 CI / 协议验收，产品界面不再展示。封闭测试邀请码：
+设置 `ENABLE_BUILTIN_TEST_ACCOUNT=1` 时，Agent API 启动会幂等创建并确认内置测试用户：账号 `test`，密码 `12345678`（Supabase 内部邮箱为 `test@research-canvas.test`），只供 CI / 协议验收，产品界面不再展示。**生产环境不要设置这个变量**——它每次启动都会把密码重置回固定值。封闭测试邀请码：
 
 ```bash
 npm run invite:create
@@ -65,11 +65,27 @@ VITE_AGENT_API_URL
 - 事件流使用 `fetch` 和 `Authorization` header，JWT 不进入 URL。
 - 运行失败事件只返回产品级通用文案，不持久化 provider 原始错误内容。
 
-生产 Compose、Tunnel 和 Vercel 变量见仓库根目录 `docker-compose.prod.yml`、`deploy/cloudflared/config.yml`、`deploy/vercel.env.example`，说明在 `docs/content/docs/overview/hosted.zh-CN.mdx`。
+## 部署
+
+日常部署全自动：push 到 `main` → GitHub Actions 跑 typecheck/test → 构建镜像推 GHCR → SSH 触发服务器 `deploy.sh` → 校验 `/health`。不需要 SSH 上服务器执行命令。
+
+完整说明（服务器初始化、GitHub Secrets、Vercel 配置、回滚、排查）见 **[`deploy/production/README.md`](../deploy/production/README.md)**。
+
+相关文件：`deploy/production/docker-compose.yml`、`deploy/production/deploy.sh`、`deploy/production/production.env.example`、`deploy/cloudflared/config.yml`、`deploy/vercel.env.example`。手工部署流程在 `docs/content/docs/overview/hosted.zh-CN.mdx`。
+
+生产密钥只存在于服务器的 `/srv/coresearch/env/production.env`，不进 Git、不进镜像、不进 compose、不进 GitHub Secrets。
+
+`/health` 返回 `{ status, version, appVersion, runtime, startedAt }`，`version` 是构建该镜像的 commit sha（由 Dockerfile 的 `GIT_SHA` build arg 注入），CI 用它断言服务器跑的确实是本次部署的代码。
 
 ## 当前部署边界
 
 Conversation session 和事件已持久化到 Postgres，可以跨实例恢复。运行中的 abort controller、在线 Canvas 快照和待确认工具调用仍在单个 Agent API 进程内；横向扩容前需要为这些瞬时状态增加粘性路由或共享事件代理。当前实现遇到运行不在本实例时会明确返回冲突，不会把 abort 或工具结果误投到其他 Project。
+
+因此 **agent-api 必须单副本**，部署只能 stop → start，不支持滚动更新。
+
+进程退出会硬中断正在跑的 run。`src/reconcile-runs.ts` 在启动时把所有残留在 `status='running'` 的 run 标记为 `failed` 并补发 `run.failed` 事件。这不只是为了界面正确——`001_agent_platform.sql` 的唯一索引 `one_active_run_per_conversation` 会让一个卡住的 run 永久阻塞该 Conversation 的新 turn。被中断那一轮的对话内容会丢失，用户需重发。
+
+内置 test 账号现在需要显式设置 `ENABLE_BUILTIN_TEST_ACCOUNT=1` 才会创建。生产环境不要设置：它每次启动都会把密码重置为固定值，自动化部署下会每天发生多次。CI 和 `npm run acceptance:live` 需要它。
 
 ## 验收
 

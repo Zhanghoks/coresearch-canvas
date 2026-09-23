@@ -65,6 +65,20 @@ const saveInflight = new Map<string, Promise<void>>();
 const removedProjectIds = new Set<string>();
 let browserPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
+function canvasPatchChanged(project: CanvasProject, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) {
+    return (Object.keys(patch) as Array<keyof typeof patch>).some((key) => !sameCanvasValue(project[key], patch[key]));
+}
+
+function sameCanvasValue(left: unknown, right: unknown) {
+    if (Object.is(left, right)) return true;
+    if (left == null || right == null || typeof left !== "object" || typeof right !== "object") return false;
+    try {
+        return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+        return false;
+    }
+}
+
 function emptyProject(id: string, title: string, now: string): CanvasProject {
     return {
         id,
@@ -363,13 +377,16 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
     replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
     updateProject: (id, patch) =>
         set((state) => {
+            let changed = false;
             const projects = state.projects.map((project) => {
-                if (project.id !== id) return project;
+                if (project.id !== id || !canvasPatchChanged(project, patch)) return project;
+                changed = true;
                 const next = { ...project, ...patch, canvasLoaded: true, agentRevision: (project.agentRevision || 0) + 1, updatedAt: new Date().toISOString() };
                 next.nodeCount = next.nodes.length;
                 next.connectionCount = next.connections.length;
                 return next;
             });
+            if (!changed) return state;
             const next = projects.find((project) => project.id === id);
             if (next) persistProject(next);
             return { projects };

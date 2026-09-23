@@ -21,7 +21,11 @@ description: 按当前研究节点路由到对应 Skill。用户继续研究、�
 
 研究卡片的新增和连线只用 `research_workflow_advance`。`explore` 不写画布；用户明确确认后才 `commit`；形成 Idea 用 `synthesize`。不要用 `canvas_create_node` 或 `canvas_apply_ops` 跨过阶段。
 
-目标实体分层见 [Research Entity Node / Group / Section](../../../docs/design/canvas/research-entity-node-model.md)：Entity Node 是长期研究实体，Group 是一次探索的视觉/provenance 容器，Section 是实体内部可寻址内容。当前 runtime 尚未迁移到这套六类 Entity Node；不要把目标设计描述成已实现能力。读取、追问或搜索 Section 不等于写入 Canvas。
+## Entity Node / Group / Section 设计
+
+目标模型见 [Research Entity Node / Group / Section](../../../docs/design/canvas/research-entity-node-model.md)。在讨论或规划新能力时，区分：Entity Node 是长期研究实体，Group 是一次探索的视觉/provenance 容器，Section 是实体内部可寻址内容。当前 runtime 尚未迁移到这套六类 Entity Node；不要把目标设计描述成已实现能力。
+
+Paper / Idea 的 Section 可以作为 Agent context 的最小聚焦对象，但读取、追问或搜索 Section 不等于写入 Canvas。只有用户明确确认，才允许通过现有工作流写入研究节点。
 
 ## 节点文档
 

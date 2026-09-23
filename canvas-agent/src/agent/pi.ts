@@ -58,7 +58,6 @@ export class CodexSkillLookupError extends Error {
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-const FILE_TOOLS = new Set(["bash", "edit", "write"]);
 const DISABLED_BUNDLED_SKILLS = new Set([
     "paper-writing",
     "paper-plan",
@@ -373,36 +372,6 @@ class PiHost {
                     noSkills: true,
                     additionalSkillPaths: [path.join(nextCwd, "skills")],
                     additionalExtensionPaths: fs.existsSync(path.join(nextCwd, "extensions")) ? [path.join(nextCwd, "extensions")] : [],
-                    extensionFactories: [{
-                        name: "canvas-permissions",
-                        factory: (pi) => {
-                            pi.on("tool_call", async (event) => {
-                                if (!FILE_TOOLS.has(event.toolName)) return;
-                                const mode = resolveAgentPermissionMode(host?.permissionMode);
-                                if (mode === "full") return;
-                                const requestId = crypto.randomUUID();
-                                const params = record(event.input);
-                                const approval = {
-                                    requestId,
-                                    method: event.toolName === "bash" ? "item/commandExecution/requestApproval" : "item/fileChange/requestApproval",
-                                    threadId: host?.threadId,
-                                    turnId: host?.activeTurnId,
-                                    command: params.command,
-                                    cwd: nextCwd,
-                                    path: params.path,
-                                };
-                                if (mode === "automatic") {
-                                    emit("codex_approval", approval);
-                                    emit("codex_approval_resolved", { requestId, decision: "accept", threadId: host?.threadId, turnId: host?.activeTurnId });
-                                    return;
-                                }
-                                emit("codex_approval", approval);
-                                const decision = await waitForApproval(requestId);
-                                emit("codex_approval_resolved", { requestId, decision, threadId: host?.threadId, turnId: host?.activeTurnId });
-                                if (decision !== "accept" && decision !== "acceptForSession") return { block: true, reason: "用户拒绝了该操作" };
-                            });
-                        },
-                    }],
                     skillsOverride: (current) => {
                         const skills = workspaceSkills(nextCwd, current.skills);
                         skillState.all = skills;
@@ -607,12 +576,6 @@ function toThinkingLevel(effort?: string): ThinkingLevel {
     return "medium";
 }
 
-function waitForApproval(requestId: string) {
-    return new Promise<string>((resolve) => {
-        approvals.set(requestId, { resolve });
-    });
-}
-
 function lastAssistantText(session: AgentSession) {
     const messages = session.messages as Array<{ role?: string; content?: unknown }>;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -623,10 +586,6 @@ function lastAssistantText(session: AgentSession) {
         if (Array.isArray(content)) return content.map((part) => String(field(part, "text") || "")).join("");
     }
     return "";
-}
-
-function record(value: unknown): JsonRecord {
-    return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
 function samePath(left: string, right: string) {

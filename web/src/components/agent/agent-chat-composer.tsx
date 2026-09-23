@@ -1,11 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Button, Dropdown, Tooltip } from "antd";
-import { ArrowUp, Check, ChevronUp, Cpu, Gauge, Hand, ImagePlus, LoaderCircle, RefreshCw, ShieldAlert, ShieldCheck, ShieldOff, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronUp, Cpu, Gauge, Hand, ImagePlus, LoaderCircle, RefreshCw, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { useAgentStore, type AgentCanvasReference, type AgentModel, type AgentPermissionMode, type AgentReasoningEffort } from "@/stores/use-agent-store";
+import { useAgentStore, type AgentCanvasReference, type AgentModel, type AgentReasoningEffort } from "@/stores/use-agent-store";
 import { canvasReferenceIcon } from "./agent-canvas-reference-preview";
 import type { AgentChatAttachment } from "./agent-chat-message";
 import { AgentChatPromptInput } from "./agent-chat-prompt-input";
@@ -25,8 +25,6 @@ export function AgentChatComposer({
     onRemoveAttachment,
     confirmTools,
     onConfirmToolsChange,
-    permissionMode,
-    onPermissionModeChange,
     models,
     model,
     reasoningEffort,
@@ -47,8 +45,6 @@ export function AgentChatComposer({
     onRemoveAttachment?: (id: string) => void;
     confirmTools?: boolean;
     onConfirmToolsChange?: (confirmTools: boolean) => void;
-    permissionMode?: AgentPermissionMode;
-    onPermissionModeChange?: (permissionMode: AgentPermissionMode) => void;
     models?: AgentModel[];
     model?: string;
     reasoningEffort?: AgentReasoningEffort | "";
@@ -102,7 +98,6 @@ export function AgentChatComposer({
                             </>
                         ) : null}
                         {onConfirmToolsChange ? <ToolConfirmationMenu confirmTools={Boolean(confirmTools)} theme={theme} onChange={onConfirmToolsChange} /> : null}
-                        {permissionMode && onPermissionModeChange ? <PermissionModeMenu permissionMode={permissionMode} theme={theme} onChange={onPermissionModeChange} /> : null}
                         {models?.length && model && onModelChange ? <AgentModelControls models={models} model={model} reasoningEffort={reasoningEffort} onModelChange={onModelChange} onReasoningEffortChange={onReasoningEffortChange} /> : null}
                         {left}
                     </div>
@@ -189,51 +184,6 @@ function AgentModelControls({ models, model, reasoningEffort, onModelChange, onR
                 </Tooltip>
             ) : null}
         </div>
-    );
-}
-
-function PermissionModeMenu({ permissionMode, theme, onChange }: { permissionMode: AgentPermissionMode; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onChange: (permissionMode: AgentPermissionMode) => void }) {
-    const { t } = useTranslation();
-    const permissionOptions: Array<{ key: AgentPermissionMode; title: string; shortTitle: string; description: string; icon: ReactNode }> = [
-        { key: "request", title: t("agent.composer.permission.request"), shortTitle: t("agent.composer.permission.request"), description: t("agent.composer.permission.requestDescription"), icon: <ShieldAlert className="size-3.5" /> },
-        { key: "automatic", title: t("agent.composer.permission.automatic"), shortTitle: t("agent.composer.permission.automatic"), description: t("agent.composer.permission.automaticDescription"), icon: <ShieldCheck className="size-3.5" /> },
-        { key: "full", title: t("agent.composer.permission.full"), shortTitle: t("agent.composer.permission.fullShort"), description: t("agent.composer.permission.fullDescription"), icon: <ShieldOff className="size-3.5" /> },
-    ];
-    const current = permissionOptions.find((item) => item.key === permissionMode) || permissionOptions[0];
-    const [open, setOpen] = useState(false);
-    return (
-        <Dropdown
-            trigger={["click"]}
-            placement="topLeft"
-            open={open}
-            onOpenChange={setOpen}
-            destroyOnHidden
-            getPopupContainer={() => document.body}
-            overlayClassName="z-[1300]"
-            menu={{
-                onClick: ({ key }) => {
-                    setOpen(false);
-                    onChange(key as AgentPermissionMode);
-                },
-                items: permissionOptions.map((item) => ({
-                    key: item.key,
-                    label: <ConfirmationOption icon={item.icon} title={item.title} description={item.description} selected={permissionMode === item.key} />,
-                })),
-            }}
-        >
-            <button
-                type="button"
-                title={open ? undefined : t("agent.composer.permissionLabel", { mode: current.shortTitle })}
-                className="flex h-8 w-8 min-w-8 shrink-0 items-center justify-center gap-0 rounded-full px-0 text-xs font-medium transition hover:bg-black/5 @min-[660px]:h-8 @min-[660px]:w-auto @min-[660px]:min-w-0 @min-[660px]:justify-start @min-[660px]:gap-1.5 @min-[660px]:px-2 dark:hover:bg-white/10"
-                style={{ color: permissionMode === "full" ? "#ea580c" : theme.node.text }}
-                aria-label={t("agent.composer.selectPermission", { mode: current.title })}
-                aria-expanded={open}
-            >
-                {current.icon}
-                <span className="hidden @min-[660px]:inline">{current.shortTitle}</span>
-                <ChevronUp className="hidden size-3 opacity-50 @min-[660px]:block" />
-            </button>
-        </Dropdown>
     );
 }
 

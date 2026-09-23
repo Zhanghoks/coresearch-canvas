@@ -8,7 +8,7 @@ description: 把已选择的 Problem、Hypothesis、Approach、Method、Evaluati
 核心问题：已选择对象形成什么研究？  
 综合必须引用已选择的 Problem、Hypothesis、Approach、Method、Evaluation。Review 不写入新的核心研究对象。
 
-目标节点模型见 [Research Entity Node / Group / Section](../../../docs/design/canvas/research-entity-node-model.md)。Idea 是由可独立追问、验证和替换的 Sections 组成的持续演化对象；Method、Claim、Evaluation 等 Section 的局部检索不能自动重写整个 Idea。当前工具仍以完整 Idea 节点文档为写入边界，Section-level replacement 和 dependency check 尚未实现。
+目标节点模型见 [Research Entity Node / Group / Section](../../../docs/design/canvas/research-entity-node-model.md)。Idea 是由可独立追问、验证和替换的 Sections 组成的持续演化对象；Method、Claim、Evaluation 等 Section 的局部检索不能自动重写整个 Idea。当前工具仍以完整 Idea 节点文档为写入边界，Section-level replacement 和 dependency check 尚未实现，不能在 Agent 回复中声称已经可用。
 
 ## Tools
 

@@ -138,7 +138,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     loadingThreads: false,
     activeTab: "chat",
     confirmTools: false,
-    permissionMode: typeof window === "undefined" ? "full" : (localStorage.getItem("canvas-agent-permission-mode") as AgentPermissionMode) || "full",
+    permissionMode: "full",
     models: [],
     model: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-model") || "",
     reasoningEffort: typeof window === "undefined" ? "" : (localStorage.getItem("canvas-agent-reasoning-effort") as AgentReasoningEffort) || "",

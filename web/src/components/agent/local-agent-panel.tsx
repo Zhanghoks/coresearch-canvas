@@ -18,7 +18,7 @@ import { uploadImage } from "@/services/image-storage";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useShallow } from "zustand/react/shallow";
-import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentPermissionMode, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
+import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool } from "@/lib/agent/agent-site-tools";
 import { usesLocalCanvasAgent } from "@/stores/use-user-store";
@@ -186,10 +186,12 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const threadOperationRef = useRef(0);
     const threadOperationSequenceRef = useRef(0);
     const documentOpenedForRef = useRef("");
+    const fullAccessSyncedRef = useRef(false);
     const documentThreadStartedForRef = useRef("");
     const restoreThreadIdRef = useRef("");
     const restorePendingRef = useRef("");
     const lastHandledSendRef = useRef(0);
+    const sendInFlightRef = useRef(false);
     const reasoningFrameRef = useRef(0);
     const reasoningPendingRef = useRef(new Map<string, AgentChatItem>());
     const flushReasoning = () => {
@@ -219,6 +221,12 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     }, []);
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
+    useEffect(() => {
+        if (!connected || !endpoint || !token.trim() || fullAccessSyncedRef.current) return;
+        fullAccessSyncedRef.current = true;
+        if (permissionMode !== "full") setAgentState({ permissionMode: "full" });
+        void syncAgentPermissionMode(endpoint, token, "full").catch(() => undefined);
+    }, [connected, endpoint, permissionMode, setAgentState, token]);
     useEffect(() => {
         let disposed = false;
         void acquireAgentClientId().then((clientId) => {
@@ -303,8 +311,10 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     }, [setAgentState]);
     const applyConversationState = useCallback((next: AgentConversationState, force = false) => {
         const current = useAgentStore.getState();
-        if (!next?.revision || !force && next.revision <= current.conversation.revision) return false;
+        if (!next?.revision) return false;
+        // 进程重启后 revision 从 1 重新计，会话 id 也会变。只按数字比较会把更新的快照丢掉，之后每次发送都报「会话已同步」。
         const conversationChanged = next.conversationId !== current.conversation.conversationId;
+        if (!force && !conversationChanged && next.revision <= current.conversation.revision) return false;
         if (conversationChanged || next.threadId !== current.activeThreadId) {
             applyWorkspaceChange({
                 activeThreadId: next.threadId,
@@ -801,7 +811,10 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         }
     };
 
-    const sendPrompt = async () => {
+    const sendPrompt = async (staleAttempt = 0) => {
+        if (staleAttempt === 0 && sendInFlightRef.current) return;
+        if (staleAttempt === 0) sendInFlightRef.current = true;
+        try {
         const text = prompt.trim();
         const files = attachments;
         const skillState = useAgentSkillStore.getState();
@@ -819,7 +832,9 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             message.warning(rt(canvasReferences.length ? "someCanvasReferencesMissing" : "canvasReferencesMissing"));
         }
         const requestPrompt = promptWithCanvasReferences(promptWithAttachments(text, files), canvasReferences);
-        if (!currentState.connected || !requestPrompt || currentState.sending || currentState.waiting || currentState.loadingThreads || !["ready", "warning"].includes(currentState.conversation.status)) return;
+        const conversationReady = ["ready", "warning"].includes(currentState.conversation.status);
+        const sendBusy = currentState.sending || currentState.waiting || currentState.loadingThreads;
+        if (!currentState.connected || !requestPrompt || !conversationReady || (staleAttempt === 0 && sendBusy)) return;
         let referenceImages: AgentAttachment[] = [];
         if (canvasReferences.some((item) => item.kind === "image")) {
             setAgentState({ sending: true, activity: rt("readingCanvasImages") });
@@ -895,8 +910,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         } catch (error) {
             const text = error instanceof Error ? error.message : rt("sendFailed");
             const response = error instanceof AgentApiError ? error.response as { code?: string; state?: AgentConversationState } : undefined;
-            if (response?.state) applyConversationState(response.state);
             const stale = response?.code === "CONVERSATION_STALE";
+            if (response?.state) applyConversationState(response.state, stale);
             const busy = response?.code === "CONVERSATION_BUSY" || text.includes("正在运行");
             const state = useAgentStore.getState();
             const removeFailedPending = (messages: AgentChatItem[]) => messages.filter((item) => item.clientMessageId !== messageId || Boolean(item.turnId));
@@ -906,6 +921,14 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             });
             const ownsCurrentThread = state.activeThreadId === (threadId || requestThreadId);
             const restoreDraft = state.prompt || state.attachments.length || state.canvasReferences.length ? {} : { prompt, attachments: files, canvasReferences };
+            const synced = stale && staleAttempt < 1 && ["ready", "warning"].includes(state.conversation.status) && Boolean(state.conversation.threadId);
+            if (synced) {
+                setAgentState({ activity: rt("conversationSynced"), sending: false, messages: removeFailedPending(state.messages) });
+                await sendPrompt(staleAttempt + 1);
+                const after = useAgentStore.getState();
+                if (!after.sending && !after.waiting && !after.prompt && !after.attachments.length) setAgentState(restoreDraft);
+                return;
+            }
             if (ownsCurrentThread) {
                 setAgentState({
                     activity: rt(stale ? "conversationSynced" : busy ? "codexRunning" : "sendFailed"),
@@ -918,6 +941,9 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                 setAgentState({ sending: false, messages: removeFailedPending(state.messages), ...restoreDraft });
             }
             addEventLog(rt("sendFailed"), error);
+        }
+        } finally {
+            if (staleAttempt === 0) sendInFlightRef.current = false;
         }
     };
 
@@ -1085,32 +1111,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             addEventLog(rt("approvalFailed"), error);
             message.error(error instanceof Error ? error.message : rt("approvalFailed"));
         }
-    };
-
-    const changePermissionMode = (nextMode: AgentPermissionMode) => {
-        const currentMode = useAgentStore.getState().permissionMode;
-        if (nextMode === currentMode) return;
-        const apply = () => {
-            localStorage.setItem("canvas-agent-permission-mode", nextMode);
-            setAgentState({ permissionMode: nextMode });
-            const { connected: live, url: agentUrl, token: agentToken } = useAgentStore.getState();
-            if (!live || !agentUrl.trim() || !agentToken.trim()) return;
-            void syncAgentPermissionMode(agentUrl.trim().replace(/\/$/, ""), agentToken, nextMode).catch((error) => {
-                message.error(error instanceof Error ? error.message : rt("approvalFailed"));
-            });
-        };
-        if (nextMode !== "full") {
-            apply();
-            return;
-        }
-        modal.confirm({
-            title: rt("enableFullAccess"),
-            content: rt("fullAccessDescription"),
-            okText: rt("enableFullAccessAction"),
-            okType: "danger",
-            cancelText: t("common.cancel"),
-            onOk: apply,
-        });
     };
 
     const toggleAgentConnection = async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -1330,6 +1330,10 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         const current = useAgentStore.getState();
         const itemId = item.itemId || item.id || createId();
         const next = scopeChatItem({ ...item, id: item.id || itemId, itemId, text } as AgentChatItem, item.threadId ?? current.activeThreadId, item.turnId ?? current.activeTurnId);
+        if (next.role === "error") {
+            const duplicate = current.messages.some((message) => message.role === "error" && message.threadId === next.threadId && message.title === next.title && message.text === next.text);
+            if (duplicate) return;
+        }
         setAgentState({ messages: upsertAgentMessage(current.messages, next) });
     };
 
@@ -1693,8 +1697,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                 onRemoveAttachment={removeAttachment}
                 confirmTools={confirmTools}
                 onConfirmToolsChange={(confirmTools) => setAgentState({ confirmTools })}
-                permissionMode={permissionMode}
-                onPermissionModeChange={changePermissionMode}
                 models={models}
                 model={model}
                 reasoningEffort={reasoningEffort}

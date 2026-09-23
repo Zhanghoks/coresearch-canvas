@@ -5,7 +5,7 @@ description: Major features available in the current project
 
 # Features
 
-This project’s product line is a **research-workflow canvas + Agent**. Multimedia generation inherited from Infinite Canvas remains available at runtime but is not the primary entry path.
+This project’s product line is a **research-workflow canvas + Agent**.
 
 ## Research flow
 
@@ -38,16 +38,15 @@ This project’s product line is a **research-workflow canvas + Agent**. Multime
 
 ## Configuration
 
-- Store OpenAI-compatible Base URL, API Key, and models in the browser.
-- Optional local CORS proxy (`canvas-proxy`).
-- Export / import channel and preference settings.
+- Optional local CORS proxy (`canvas-proxy`) for browser requests to third-party APIs and WebDAV.
+- Export / import proxy and WebDAV settings.
 
-## Secondary capabilities (not main-flow entries)
+## Canvas media nodes (outside the research create menus)
 
-Still usable via upload, paste, assets, or generation-config nodes, but **not** in the research create menus:
+Still usable on the canvas, but **not** exposed in the research create menus:
 
-- Text / image / video / audio nodes and generation-config nodes.
-- Asset library and image edit tools.
+- Text / image / video / audio nodes: upload, paste, drag-in, preview, export.
+- Local image crop, split, and upscale tools.
 - Remote node plugin system.
 - PDF / Web literature nodes (used in Deep Dive literature layers; not on the bottom toolbar).
 

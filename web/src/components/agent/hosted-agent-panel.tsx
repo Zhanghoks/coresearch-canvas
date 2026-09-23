@@ -58,12 +58,12 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
             setConversationId(next.id);
         }).catch((error) => {
             if (conversationLoadRef.current?.key === key) conversationLoadRef.current = null;
-            if (current) message.error(error instanceof Error ? error.message : "读取对话失败");
+            if (current && !scope.recoverMissingProject(error)) message.error(error instanceof Error ? error.message : "读取对话失败");
         }).finally(() => {
             if (current) setInitializing(false);
         });
         return () => { current = false; };
-    }, [message, projectId, scope.enabled, scope.token]);
+    }, [message, projectId, scope.enabled, scope.recoverMissingProject, scope.token]);
 
     useEffect(() => {
         sequenceRef.current = 0;
@@ -211,17 +211,33 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
 
     const completeTool = async (approved: boolean) => {
         if (!pendingTool || !scope.token || !projectId) return;
+        const token = scope.token;
+        const callId = pendingTool.callId;
         try {
             const applied = approved ? scope.canvasContext?.applyOps(pendingTool.operations) : null;
-            const revision = (scope.project?.agentRevision || 0) + 1;
-            await hostedAgentApi.completeCanvasTool(scope.token, projectId, {
-                callId: pendingTool.callId,
-                ...(applied ? { clientId: hostedBrowserClientId(), revision, snapshot: sanitizeHostedSnapshot(applied) } : {}),
-                result: approved ? { approved: true, applied: Boolean(applied), revision: applied ? revision : undefined } : { approved: false, error: "user_rejected" },
-            });
+            if (applied) {
+                // 带快照的工具结果与普通画布发布走同一条队列：baseRevision 连续，服务端分配新 revision。
+                const snapshot = sanitizeHostedSnapshot(applied);
+                await scope.commitCanvas(snapshot, async (baseRevision) => {
+                    const committed = await hostedAgentApi.completeCanvasTool(token, projectId, {
+                        callId,
+                        clientId: hostedBrowserClientId(),
+                        baseRevision,
+                        snapshot,
+                        result: { approved: true, applied: true, baseRevision },
+                    });
+                    if (!committed) throw new Error("服务端没有返回画布 revision");
+                    return committed;
+                });
+            } else {
+                await hostedAgentApi.completeCanvasTool(token, projectId, {
+                    callId,
+                    result: approved ? { approved: true, applied: false } : { approved: false, error: "user_rejected" },
+                });
+            }
             setPendingTool(null);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "画布操作失败");
+            if (!scope.recoverMissingProject(error)) message.error(error instanceof Error ? error.message : "画布操作失败");
         }
     };
 

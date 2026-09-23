@@ -36,13 +36,43 @@ export const hostedAgentApi = {
     runTurn: (token: string, projectId: string, conversationId: string, prompt: string) => request<{ runId: string }>(token, `/v1/projects/${projectId}/conversations/${conversationId}/turns`, { method: "POST", body: JSON.stringify({ prompt }) }),
     abort: (token: string, projectId: string, conversationId: string, runId: string) => request<{ runId: string; abortRequested: boolean }>(token, `/v1/projects/${projectId}/conversations/${conversationId}/runs/${runId}/abort`, { method: "POST" }),
     readCanvas: (token: string, projectId: string) => request<HostedCanvas>(token, `/v1/projects/${projectId}/canvas`),
-    publishCanvas: (token: string, projectId: string, clientId: string, revision: number, snapshot: Record<string, unknown>) => request(token, `/v1/projects/${projectId}/canvas/state`, { method: "PUT", body: JSON.stringify({ clientId, revision, snapshot }) }),
-    completeCanvasTool: (token: string, projectId: string, input: { callId: string; clientId?: string; revision?: number; snapshot?: Record<string, unknown>; result: Record<string, unknown> }) => request(token, `/v1/projects/${projectId}/canvas/tool-results/${input.callId}`, { method: "POST", body: JSON.stringify(input) }),
+    publishCanvas: (token: string, projectId: string, clientId: string, baseRevision: number, snapshot: Record<string, unknown>) => request<HostedCanvas>(token, `/v1/projects/${projectId}/canvas/state`, { method: "PUT", body: JSON.stringify({ clientId, baseRevision, snapshot }) }),
+    /** 带快照时返回服务端分配的新 revision；拒绝执行（不带快照）时返回 undefined。 */
+    completeCanvasTool: (token: string, projectId: string, input: { callId: string; clientId?: string; baseRevision?: number; snapshot?: Record<string, unknown>; result: Record<string, unknown> }) => request<HostedCanvas | undefined>(token, `/v1/projects/${projectId}/canvas/tool-results/${input.callId}`, { method: "POST", body: JSON.stringify(input) }),
     listSkills: (token: string, projectId: string) => request<HostedProjectSkill[]>(token, `/v1/projects/${projectId}/skills`),
     saveSkill: (token: string, projectId: string, input: { name: string; definition: string; enabled: boolean }) => request<HostedProjectSkill>(token, `/v1/projects/${projectId}/skills/${encodeURIComponent(input.name)}`, { method: "PUT", body: JSON.stringify(input) }),
     deleteSkill: (token: string, projectId: string, name: string) => request(token, `/v1/projects/${projectId}/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
     streamEvents,
 };
+
+/** agent-api 返回的结构化错误：保留 HTTP 状态和错误码，调用方据此区分「项目不存在」「revision 冲突」等情况。 */
+export class HostedApiError extends Error {
+    constructor(
+        message: string,
+        readonly status: number,
+        readonly code: string,
+        readonly details?: Record<string, unknown>,
+    ) {
+        super(message);
+        this.name = "HostedApiError";
+    }
+}
+
+export function isHostedApiError(error: unknown, code: string): error is HostedApiError {
+    return error instanceof HostedApiError && error.code === code;
+}
+
+/** revision 冲突时服务端带回的当前 revision；不是冲突返回 null。 */
+export function canvasConflictRevision(error: unknown) {
+    if (!isHostedApiError(error, "canvas_revision_conflict")) return null;
+    const current = error.details?.currentRevision;
+    return typeof current === "number" ? current : null;
+}
+
+async function apiError(response: Response, fallback: string) {
+    const body = await response.json().catch(() => null) as { error?: { code?: string; message?: string; details?: Record<string, unknown> } } | null;
+    return new HostedApiError(body?.error?.message || `${fallback}（${response.status}）`, response.status, body?.error?.code || "http_error", body?.error?.details);
+}
 
 export async function registerHostedAccount(inviteCode: string, nickname: string, password: string) {
     if (!baseUrl) throw new Error("托管 Agent API 尚未配置");
@@ -51,17 +81,13 @@ export async function registerHostedAccount(inviteCode: string, nickname: string
         headers: { "Content-Type": "application/json", ...ngrokHeaders },
         body: JSON.stringify({ inviteCode, nickname, password }),
     });
-    const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-    if (!response.ok) throw new Error(body?.error?.message || `注册失败（${response.status}）`);
+    if (!response.ok) throw await apiError(response, "注册失败");
 }
 
 async function request<T = unknown>(token: string, path: string, init: RequestInit = {}): Promise<T> {
     if (!baseUrl) throw new Error("托管 Agent API 尚未配置");
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...ngrokHeaders, ...init.headers } });
-    if (!response.ok) {
-        const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-        throw new Error(body?.error?.message || `Agent API 请求失败（${response.status}）`);
-    }
+    if (!response.ok) throw await apiError(response, "Agent API 请求失败");
     if (response.status === 204) return undefined as T;
     return await response.json() as T;
 }
@@ -69,7 +95,8 @@ async function request<T = unknown>(token: string, path: string, init: RequestIn
 async function streamEvents(token: string, projectId: string, conversationId: string, after: number, signal: AbortSignal, onEvent: (event: HostedRuntimeEvent) => void) {
     if (!baseUrl) throw new Error("托管 Agent API 尚未配置");
     const response = await fetch(`${baseUrl}/v1/projects/${projectId}/conversations/${conversationId}/events?after=${after}`, { headers: { Authorization: `Bearer ${token}`, ...ngrokHeaders }, signal });
-    if (!response.ok || !response.body) throw new Error(`Agent 事件连接失败（${response.status}）`);
+    if (!response.ok) throw await apiError(response, "Agent 事件连接失败");
+    if (!response.body) throw new Error("Agent 事件连接失败：没有响应体");
     if (response.headers.get("X-Agent-Protocol-Version") !== "1") throw new Error("Agent 通信协议版本不兼容");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

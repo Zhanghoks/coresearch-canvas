@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { usesLocalCanvasAgent, usesPlatformHostedAgent } from "@/stores/use-user-store";
+import { hostedAgentConfigured } from "@/services/api/supabase";
 import { readBrowserCanvasWorkspace, writeBrowserCanvasWorkspace } from "@/lib/canvas/canvas-browser-persistence";
 import { canvasWorkspaceUserId } from "@/lib/canvas/workspace-user";
 import { deleteWorkspaceProject, discoverLocalAgent, listWorkspaceProjects, readWorkspaceProject, readWorkspaceProjectLocation, revealWorkspaceProject, writeWorkspaceProject, type WorkspaceProjectRecord } from "@/services/api/canvas-agent";
@@ -41,6 +42,8 @@ export type CanvasDeletedProject = {
 
 type CanvasStore = {
     hydrated: boolean;
+    /** 已从浏览器存储读入的工作区属于哪个用户；未读入前禁止写回，防止用空列表覆盖已有数据。 */
+    hydratedOwnerId: string | null;
     workspaceError: string;
     projects: CanvasProject[];
     deletedProjects: CanvasDeletedProject[];
@@ -55,6 +58,10 @@ type CanvasStore = {
     revealProject: (id: string) => Promise<void>;
     bindAgentProject: (id: string, binding: { projectId: string; canvasWorkspaceId: string; ownerUserId: string }) => void;
     markAgentProjectDeleted: (id: string) => void;
+    /** 托管端已不存在该项目时解除绑定，随后 useHostedAgentProject 会自动重新绑定。 */
+    unbindAgentProject: (id: string) => void;
+    /** 记录服务端确认的画布 revision（由服务端分配）。 */
+    setAgentRevision: (id: string, revision: number) => void;
     replaceProjects: (projects: CanvasProject[], deletedProjects?: CanvasDeletedProject[]) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
 };
@@ -180,7 +187,9 @@ function scheduleBrowserWorkspacePersist() {
     browserPersistTimer = setTimeout(() => {
         browserPersistTimer = null;
         const ownerUserId = canvasWorkspaceUserId();
-        const { projects, deletedProjects } = useCanvasStore.getState();
+        const { projects, deletedProjects, hydratedOwnerId } = useCanvasStore.getState();
+        // 这个用户的工作区还没读入时，内存里的列表不代表存储里的真实内容，写回会把已有项目覆盖掉。
+        if (hydratedOwnerId !== ownerUserId) return;
         void writeBrowserCanvasWorkspace(ownerUserId, {
             projects: projects.filter((project) => project.localOwnerUserId === ownerUserId),
             deletedProjects: deletedProjects.filter((project) => project.localOwnerUserId === ownerUserId),
@@ -237,18 +246,31 @@ async function flushProject(id: string) {
     await writeWorkspaceProject(endpoint, token, userId, toRecord(project));
 }
 
+// loadWorkspace 可能在登录态变化时被连续调用；只采纳最后一次调用的结果，旧调用晚到的结果（成功或失败）直接丢弃。
+let workspaceGeneration = 0;
+
 export const useCanvasStore = create<CanvasStore>()((set, get) => ({
     hydrated: false,
+    hydratedOwnerId: null,
     workspaceError: "",
     projects: [],
     deletedProjects: [],
     loadWorkspace: async () => {
+        const generation = ++workspaceGeneration;
+        const current = () => generation === workspaceGeneration;
+        if (hostedAgentConfigured && !usesPlatformHostedAgent()) {
+            // 托管部署下还没有登录用户（或刚退出）：界面显示登录门禁，不去连本机 Canvas Agent。
+            set({ hydrated: false, hydratedOwnerId: null, projects: [], deletedProjects: [], workspaceError: "" });
+            return;
+        }
         if (usesPlatformHostedAgent()) {
+            const ownerUserId = canvasWorkspaceUserId();
             try {
-                const ownerUserId = canvasWorkspaceUserId();
                 const snapshot = await readBrowserCanvasWorkspace(ownerUserId);
+                if (!current()) return;
                 set((state) => ({
                     hydrated: true,
+                    hydratedOwnerId: ownerUserId,
                     workspaceError: "",
                     projects: snapshot.projects.map((project) => {
                         const existing = state.projects.find((item) => item.id === project.id);
@@ -257,20 +279,22 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
                     deletedProjects: snapshot.deletedProjects,
                 }));
             } catch (error) {
-                set({ hydrated: true, projects: [], deletedProjects: [], workspaceError: error instanceof Error ? error.message : String(error) });
+                // 读失败时不清空列表、也不标记已读入，避免之后的写回用空列表覆盖存储。
+                if (current()) set({ hydrated: true, workspaceError: error instanceof Error ? error.message : String(error) });
             }
             return;
         }
         try {
             const { endpoint, token, userId } = await agentSession();
             const result = await listWorkspaceProjects(endpoint, token, userId);
+            if (!current()) return;
             set((state) => ({
                 hydrated: true,
                 workspaceError: "",
                 projects: (result.data || []).map((item) => fromRecord(item, state.projects.find((project) => project.id === item.id))),
             }));
         } catch (error) {
-            set({ hydrated: true, projects: [], workspaceError: error instanceof Error ? error.message : String(error) });
+            if (current()) set({ hydrated: true, workspaceError: error instanceof Error ? error.message : String(error) });
         }
     },
     loadProject: async (id) => {
@@ -369,11 +393,27 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
         const { endpoint, token, userId } = await agentSession();
         await revealWorkspaceProject(endpoint, token, userId, id);
     },
-    bindAgentProject: (id, binding) =>
+    bindAgentProject: (id, binding) => {
+        // 新绑定的托管项目 revision 从 0 开始；立即持久化，否则刷新后绑定丢失会再建一个托管项目。
         set((state) => ({
-            projects: state.projects.map((project) => project.id === id ? { ...project, agentProjectId: binding.projectId, agentCanvasWorkspaceId: binding.canvasWorkspaceId, agentOwnerUserId: binding.ownerUserId, agentRevision: project.agentRevision || 0 } : project),
-        })),
+            projects: state.projects.map((project) => project.id === id ? { ...project, agentProjectId: binding.projectId, agentCanvasWorkspaceId: binding.canvasWorkspaceId, agentOwnerUserId: binding.ownerUserId, agentRevision: 0 } : project),
+        }));
+        const project = get().projects.find((item) => item.id === id);
+        if (project) persistProject(project);
+    },
     markAgentProjectDeleted: (id) => set((state) => ({ deletedProjects: state.deletedProjects.map((item) => item.id === id ? { ...item, agentProjectId: undefined } : item) })),
+    unbindAgentProject: (id) => {
+        set((state) => ({
+            projects: state.projects.map((project) => project.id === id ? { ...project, agentProjectId: undefined, agentCanvasWorkspaceId: undefined, agentOwnerUserId: undefined, agentRevision: 0 } : project),
+        }));
+        const project = get().projects.find((item) => item.id === id);
+        if (project) persistProject(project);
+    },
+    setAgentRevision: (id, revision) => {
+        set((state) => ({ projects: state.projects.map((project) => project.id === id ? { ...project, agentRevision: revision } : project) }));
+        const project = get().projects.find((item) => item.id === id);
+        if (project) persistProject(project);
+    },
     replaceProjects: (projects, deletedProjects = []) => set({ projects, deletedProjects }),
     updateProject: (id, patch) =>
         set((state) => {
@@ -381,7 +421,8 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             const projects = state.projects.map((project) => {
                 if (project.id !== id || !canvasPatchChanged(project, patch)) return project;
                 changed = true;
-                const next = { ...project, ...patch, canvasLoaded: true, agentRevision: (project.agentRevision || 0) + 1, updatedAt: new Date().toISOString() };
+                // agentRevision 只记录服务端确认的版本，本地编辑不再自增（由 HostedCanvasSync 发布后回写）。
+                const next = { ...project, ...patch, canvasLoaded: true, updatedAt: new Date().toISOString() };
                 next.nodeCount = next.nodes.length;
                 next.connectionCount = next.connections.length;
                 return next;

@@ -13,6 +13,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const initializeUser = useUserStore((state) => state.initialize);
     const loadWorkspace = useCanvasStore((state) => state.loadWorkspace);
     const user = useUserStore((state) => state.user);
+    const authLoading = useUserStore((state) => state.loading);
     const accessToken = useUserStore((state) => state.accessToken);
     const deletedProjects = useCanvasStore((state) => state.deletedProjects);
     const markAgentProjectDeleted = useCanvasStore((state) => state.markAgentProjectDeleted);
@@ -22,8 +23,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [initializeUser]);
 
     useEffect(() => {
+        // 登录态恢复前不加载：此时 user 为空，会误走本机 Canvas Agent 路径（刷新后项目列表被清空的根因）。
+        if (authLoading) return;
         void loadWorkspace();
-    }, [loadWorkspace, user?.id]);
+    }, [authLoading, loadWorkspace, user?.id]);
 
     useEffect(() => {
         if (!user || !accessToken) return;

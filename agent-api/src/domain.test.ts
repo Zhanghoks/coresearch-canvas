@@ -100,6 +100,48 @@ test("同一 Conversation 拒绝并发 run，不同 Conversation 可以并行，
     assert.equal((await store.readRun(ctx, activeSecondConversation.id, second.runId)).status, "completed");
 });
 
+test("Agent 运行失败时服务端记录原始错误，推给前端的 payload 保持通用；abort 不记错误", async (t) => {
+    const logged = t.mock.method(console, "error", () => {});
+    const store = new InMemoryResearchStore();
+    const project = await store.createProject("alice", "A");
+    const ctx = { userId: "alice", projectId: project.id, canvasWorkspaceId: project.canvasWorkspaceId };
+    const cause = new Error("找不到 Pi 模型：openai/deepseek-flash");
+    const failing = new RuntimeManager({ execute: async () => { throw cause; } }, new EventHub());
+    const conversation = await store.createConversation(ctx, "Failing");
+
+    const { runId } = await failing.runTurn(store, ctx, { conversationId: conversation.id, prompt: "hi" });
+    await waitForTerminal(store, ctx, conversation.id);
+
+    const terminalEvent = (await store.listEvents(ctx, conversation.id, 0)).at(-1)!;
+    assert.equal(terminalEvent.type, "run.failed");
+    assert.deepEqual(terminalEvent.payload, { message: "Agent 运行失败" });
+    assert.equal(logged.mock.callCount(), 1);
+    const [message, error] = logged.mock.calls[0]!.arguments;
+    assert.match(String(message), new RegExp(runId));
+    assert.equal(error, cause);
+
+    logged.mock.resetCalls();
+    const aborting = new RuntimeManager({
+        execute: (input) => new Promise((_, reject) => input.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })),
+    }, new EventHub());
+    const second = await store.createConversation(ctx, "Aborted");
+    const run = await aborting.runTurn(store, ctx, { conversationId: second.id, prompt: "hi" });
+    await aborting.abort(store, ctx, second.id, run.runId);
+    await waitForTerminal(store, ctx, second.id);
+    assert.equal((await store.listEvents(ctx, second.id, 0)).at(-1)?.type, "run.aborted");
+    assert.equal(logged.mock.callCount(), 0);
+});
+
+async function waitForTerminal(store: InMemoryResearchStore, ctx: { userId: string; projectId: string; canvasWorkspaceId: string }, conversationId: string) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+        const events = await store.listEvents(ctx, conversationId, 0);
+        if (events.some((event) => ["run.completed", "run.failed", "run.aborted"].includes(event.type))) return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("run 没有结束");
+}
+
 class BlockingRuntime implements RuntimeAdapter {
     private readonly completions = new Map<string, () => void>();
     private readonly settlements = new Map<string, Promise<void>>();

@@ -50,14 +50,18 @@ export class RuntimeManager implements AgentRuntime {
                 emit: (event) => this.emit(store, ctx, conversationId, runId, event.type, event.itemId, event.payload),
             });
             if (controller.signal.aborted) status = "aborted";
-        } catch {
+        } catch (error) {
             status = controller.signal.aborted ? "aborted" : "failed";
-            if (status === "failed") payload = { message: "Agent 运行失败" };
+            if (status === "failed") {
+                // 原始错误可能带模型提供方细节，只写服务端日志；推给前端的 payload 保持通用。
+                console.error(`Agent run failed (run=${runId} conversation=${conversationId} project=${ctx.projectId})`, error);
+                payload = { message: "Agent 运行失败" };
+            }
         }
         try {
             await this.finish(store, ctx, conversationId, runId, status, payload);
-        } catch {
-            console.error("Failed to persist Agent run terminal state");
+        } catch (error) {
+            console.error(`Failed to persist Agent run terminal state (run=${runId})`, error);
         } finally {
             this.active.delete(runId);
         }

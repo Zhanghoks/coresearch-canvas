@@ -69,6 +69,19 @@ test("Project Skill 和 Canvas 工具调用不能跨 Project", async () => {
     await assert.rejects(mutation.result, (error) => error instanceof AppError && error.code === "run_aborted");
 });
 
+test("画布修改请求超时未确认时按未批准返回，运行不会一直占住对话", async () => {
+    const canvas = new CanvasBridge(20);
+    const ctx = { userId: "alice", projectId: "p", canvasWorkspaceId: "w" };
+    canvas.publishSnapshot(ctx, "browser", 1, {});
+    const timedOut = canvas.requestMutation(ctx, new AbortController().signal);
+    assert.deepEqual(await timedOut.result, { approved: false, error: "confirmation_timeout" });
+    assert.throws(() => canvas.completeMutation(ctx, timedOut.callId, { approved: true }), (error) => error instanceof AppError && error.code === "canvas_tool_call_not_found");
+
+    const confirmed = canvas.requestMutation(ctx, new AbortController().signal);
+    canvas.completeMutation(ctx, confirmed.callId, { approved: true });
+    assert.deepEqual(await confirmed.result, { approved: true });
+});
+
 test("同一 Conversation 拒绝并发 run，不同 Conversation 可以并行，abort 只有一个终态", async () => {
     const store = new InMemoryResearchStore();
     const adapter = new BlockingRuntime();

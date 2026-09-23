@@ -7,7 +7,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { hostedAgentApi, type HostedConversation, type HostedProjectSkill, type HostedRuntimeEvent } from "@/services/api/hosted-agent";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { AgentChatMessage, type AgentChatMessageItem } from "./agent-chat-message";
+import { AgentChatMessage, AgentPendingToolCard, type AgentChatMessageItem } from "./agent-chat-message";
 import { presentCanvasReferenceMessage, promptWithCanvasReferences } from "./agent-event-formatters";
 import { hostedBrowserClientId, sanitizeHostedSnapshot, type useHostedAgentProject } from "./use-hosted-agent-project";
 
@@ -38,6 +38,7 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
     const [skillEnabled, setSkillEnabled] = useState(true);
     const [savingSkill, setSavingSkill] = useState(false);
     const sequenceRef = useRef(0);
+    const scrollRef = useRef<HTMLDivElement>(null);
     const protocolErrorRef = useRef(false);
     const conversationLoadRef = useRef<{ key: string; promise: Promise<{ items: HostedConversation[]; next: HostedConversation }> } | null>(null);
     const projectId = scope.project?.agentProjectId || "";
@@ -134,6 +135,8 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
             setMessages((items) => upsert(items, { id: `tool:${event.itemId}`, role: "tool", title: HOSTED_TOOL_TITLES[toolName] || toolName, text: "", detail: { status } }));
             if (event.type === "tool.completed") setPendingTool(null);
         } else if (event.type === "canvas.tool.requested") {
+            // 运行会一直等用户确认；面板收起时用户看不到确认卡片，对话就一直被占住。
+            useAgentStore.getState().openPanel();
             setPendingTool({
                 callId: String(event.payload.callId || event.itemId),
                 summary: String(event.payload.summary || "Agent 请求修改当前画布"),
@@ -231,14 +234,24 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
         const request = promptWithCanvasReferences(text, store.canvasReferences, "canvas_read_snapshot");
         if (runId) {
             setPrompt(request);
-            message.info("Agent 正在运行，已放入输入框，结束后再发送");
+            if (pendingTool) message.warning("Agent 在等你确认上一次的画布修改：先在右侧点「确认」或「拒绝」，这条消息已放入输入框");
+            else message.info("Agent 正在运行，已放入输入框，结束后再发送");
             return;
         }
         void send(request);
     }, [pendingSend, canSend]);
 
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+    }, [messages, pendingTool]);
+
     const completeTool = async (approved: boolean) => {
         if (!pendingTool || !scope.token || !projectId) return;
+        if (approved && !scope.canvasContext) {
+            message.warning("画布还没加载完成，稍后再确认");
+            return;
+        }
         const token = scope.token;
         const callId = pendingTool.callId;
         try {
@@ -291,7 +304,7 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
                 <button type="button" className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10" onClick={() => void createConversation()} title="新对话"><Plus className="size-4" /></button>
                 <button type="button" className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10" onClick={closePanel} title="收起"><PanelRightClose className="size-4" /></button>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+            <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
                 {!scope.enabled || initializing ? <div className="text-sm opacity-60">正在绑定当前 Project 与独立 Canvas Workspace… {!initializing && !scope.binding ? <button type="button" className="underline" onClick={scope.retryBinding}>重试</button> : null}</div> : null}
                 {conversations.length > 1 ? (
                     <select className="w-full bg-transparent p-1 text-sm" value={conversationId} onChange={(event) => setConversationId(event.target.value)}>
@@ -301,11 +314,13 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
                 {messages.map((item) => <AgentChatMessage key={item.id} item={item} theme={theme} />)}
                 {streamError ? <div className="text-sm opacity-60">{streamError} <button type="button" className="underline" onClick={() => setStreamAttempt((value) => value + 1)}>按序号重新连接</button></div> : null}
                 {pendingTool ? (
-                    <div className="border-l-2 pl-3 text-sm" style={{ borderColor: theme.node.stroke }}>
-                        <div className="mb-2 font-medium">{pendingTool.summary}</div>
-                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs opacity-70">{JSON.stringify(pendingTool.operations, null, 2)}</pre>
-                        <div className="mt-2 flex justify-end gap-2"><Button size="small" onClick={() => void completeTool(false)}>拒绝</Button><Button size="small" type="primary" disabled={!scope.canvasContext} onClick={() => void completeTool(true)}>确认执行</Button></div>
-                    </div>
+                    <AgentPendingToolCard
+                        summary={pendingTool.summary}
+                        detail={{ rows: [{ label: "画布操作", value: `${pendingTool.operations.length} 项` }], output: JSON.stringify(pendingTool.operations, null, 2) }}
+                        theme={theme}
+                        onReject={() => void completeTool(false)}
+                        onApprove={() => void completeTool(true)}
+                    />
                 ) : null}
             </div>
             <div className="px-3 pb-3 pt-2">

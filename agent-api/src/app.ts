@@ -29,7 +29,8 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
     const invites = new InviteRateLimiter();
     const inviteAdmin = createInviteAdmin(config.supabaseUrl, config.supabaseSecretKey);
 
-    app.use(cors({ origin: (origin, callback) => callback(null, !origin || config.origins.includes(origin)) }));
+    // 跨域时浏览器默认不让前端读自定义响应头，前端连 SSE 要校验 X-Agent-Protocol-Version，必须显式暴露。
+    app.use(cors({ origin: (origin, callback) => callback(null, !origin || config.origins.includes(origin)), exposedHeaders: ["X-Agent-Protocol-Version"] }));
     app.use(express.json());
     app.get("/health", (_request, response) => response.json({
         ok: true,

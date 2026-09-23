@@ -37,7 +37,7 @@ while :; do
         log "无法解析 $BUNDLE_REPO:main（网络或仓库不可达），稍后重试"
     elif [ "$target" != "$(current_version)" ] && [ ! -f "$STATE_DIR/failed-$target" ]; then
         log "发现新版本 $target（当前 $(current_version)）"
-        "$CORESEARCH_HOME/bin/deploy.sh" "sha-$target" || log "部署 $target 失败，已回退；不再自动重试该版本"
+        "$CORESEARCH_HOME/bin/deploy.sh" "sha-$target" || log "部署 $target 未完成（原因见上方 deploy 日志）"
     fi
     sleep "$INTERVAL"
 done

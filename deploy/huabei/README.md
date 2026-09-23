@@ -78,6 +78,16 @@ cloudflared tunnel route dns coresearch api.<你的域名>
 
 最后把 Vercel 的 `VITE_AGENT_API_URL` 和 GitHub Variable `API_PUBLIC_URL` 改成 `https://api.<你的域名>`，并确认 `AGENT_API_ORIGINS` 包含前端域名。
 
+## 临时：Quick Tunnel（仅用于验证，不是生产入口）
+
+在正式域名就绪前，服务器上跑着一个 pm2 进程 `cloudflared-quick`（`cloudflared tunnel --url http://127.0.0.1:4100`），
+地址形如 `https://<随机>.trycloudflare.com`，已临时写入 Vercel `VITE_AGENT_API_URL` 和 GitHub `API_PUBLIC_URL`。
+
+- **SSE 不可用**：实测经 Quick Tunnel 的 `/events` 在 run 完成后仍收不到任何事件，约 67 秒后被断开；前端 Agent 对话没有轮询兜底，所以对话不会显示回复。登录、项目、画布等普通请求正常。
+- 进程重启会换一个新地址，届时两处变量都要更新，Vercel 还要重新部署。
+- 它不在 `ecosystem.config.cjs` 里，`start.sh` 不会自动拉起它。
+- Named Tunnel 就绪后：`pm2 delete cloudflared-quick && pm2 save`，并把两处变量改成正式域名。
+
 ## 日常操作
 
 所有命令先 `source /root/data/zmj/coresearch/bin/env.sh`。

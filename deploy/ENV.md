@@ -46,7 +46,7 @@ GHCR 上的 `coresearch-agent-api-bundle` 包必须设为 **Public**（Package s
 | `SUPABASE_PUBLISHABLE_KEY` | 服务端校验用 | 同上 |
 | `SUPABASE_SECRET_KEY` | `service_role` 密钥，只能在这里 | 同上；如果误填到 Vercel 会导致密钥随前端 JS 泄露，必须立刻轮换 |
 | `AGENT_API_ORIGINS` | CORS 白名单，逗号分隔精确 origin | 前端报 CORS 错误；新增 Vercel Preview 域名忘了追加也会报 CORS |
-| `PI_PROVIDER` / `PI_MODEL` | 模型提供方/型号 | agent-api 启动即退出 |
+| `PI_PROVIDER` / `PI_MODEL` | 模型提供方/型号，必须是 pi-ai 内置注册表里的组合。DeepSeek 用 `deepseek` / `deepseek-v4-flash`（不是 `openai` / `deepseek-flash`） | 缺失时启动即退出；组合不在注册表里时服务照常启动，但每次 Agent turn 约 2 秒后 `run.failed`，消息只有「Agent 运行失败」，日志里没有原因 |
 | `PI_API_KEY` | 模型 Key，只放这里 | 同上；同样禁止出现在 Vercel 或 GitHub Secrets |
 | `PI_AGENT_DIR` | Pi 会话数据目录。huabei 方案由 pm2 强制设为 `coresearch/data/pi`（持久盘），这里写的值会被覆盖 | 若落在容器根文件系统上，实例重建后会话数据全部丢失 |
 | `PORT` | 固定 `4100`，要和 Tunnel ingress、health 地址一致 | 改了但没同步改 Tunnel 配置会导致公网 502、部署 health 断言失败 |

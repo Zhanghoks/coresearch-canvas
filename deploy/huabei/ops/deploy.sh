@@ -47,7 +47,8 @@ if [ ! -f "$release/VERSION" ]; then
     log "拉取 $BUNDLE_REPO:$tag"
     tmp="$(mktemp -d "$RELEASES_DIR/.tmp-XXXXXX")"
     trap 'rm -rf "$tmp"' EXIT
-    (cd "$tmp" && oras pull --no-tty "$BUNDLE_REPO:$tag" >/dev/null)
+    # 下载失败时不切版本、不记 failed，交给 updater 下一轮重试（这台机器访问 GHCR 的速度波动很大）。
+    (cd "$tmp" && oras pull --no-tty "$BUNDLE_REPO:$tag" >/dev/null) || { log "拉取 $tag 失败，未切换版本，稍后重试"; exit 1; }
     mkdir "$tmp/unpacked"
     tar -xzf "$tmp/agent-api.tar.gz" -C "$tmp/unpacked"
     mv "$tmp/unpacked" "$release"

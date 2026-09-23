@@ -7,7 +7,7 @@
 | 本身是容器：没有 dockerd，没有 systemd（PID 1 是 bash） | 不能用 Docker Compose；进程由 pm2 管理；没有开机自启 |
 | `/` 是 overlay，实例重建即丢失；只有 `/root/data` 是持久盘（Lustre，多租户共享，777） | 运行时、pm2 状态、数据、密钥全部放在 `/root/data/zmj/coresearch`，目录 700 |
 | 入站 SSH 经 `ssh-cn-huabei1.ebcloud.com` 中转，频繁断线，传不了大文件 | CI 不 SSH 进来；服务器主动从 GHCR 拉取 |
-| 出站访问 GitHub / GHCR / nodejs.org 稳定 | 所有二进制和运行包都从外网拉 |
+| 出站访问 GHCR 的 blob 下载节点经常只有几 KB/s；codeload.github.com、registry.npmjs.org、nodejs.org 通常 1MB/s 以上 | 先从 GHCR 下载运行包（90s 预算，断点续传 + sha256 校验）；超时则下载该 commit 源码，用与 CI 相同的 `build-bundle.sh` 在本机构建（约 30s），产物同样校验 `VERSION` |
 
 原则和 Docker 方案一致：**服务器上没有源码、不构建；每个版本是一个 `sha-<commit>` 运行包；回滚就是换版本。**
 

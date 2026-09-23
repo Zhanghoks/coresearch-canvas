@@ -149,7 +149,7 @@ sudo vim /etc/cloudflared/config.yml    # 填真实 TUNNEL_ID 和域名
 
 ### 7. 执行数据库 migration
 
-数据库结构由 CI 的 `migrate` job 通过 `supabase db push` 执行，首次接入需要先做一次性基线，见 `supabase/README.md`。
+数据库结构由 CI 的 `migrate` job 通过 `supabase db push` 执行，开启方法见 `supabase/README.md`。
 
 ### 8. 触发首次部署
 

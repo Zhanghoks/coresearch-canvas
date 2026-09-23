@@ -26,7 +26,7 @@
 | 名称 | 类型 | 用途 | 缺失/错误时的现象 |
 |---|---|---|---|
 | `SUPABASE_DB_URL` | Secret（Environment `production`） | CI 执行 `supabase db push` 的数据库连接串（Session pooler，密码 percent-encode） | 开启 migration 后 `migrate` job 失败，后端不会发布 |
-| `SUPABASE_MIGRATIONS_ENABLED` | Variable | 设为 `true` 才让 CI 执行 migration；首次必须先做 `supabase/README.md` 的一次性基线 | 不是 `true` 时 `migrate` job 打 warning 并跳过，schema 需要手工维护 |
+| `SUPABASE_MIGRATIONS_ENABLED` | Variable | 设为 `true` 才让 CI 执行 migration；开启步骤见 `supabase/README.md` | 不是 `true` 时 `migrate` job 打 warning 并跳过，schema 需要手工维护 |
 | `API_PUBLIC_URL` | Variable（必填） | 发布后轮询公网 `/health`，断言 `version` 是本次 commit | 未设置时 `verify` job 直接失败（不静默跳过） |
 
 发布运行包用的是 workflow 自带的 `GITHUB_TOKEN`，不需要额外配置。**不再需要 `SERVER_*` 系列 SSH Secret**：服务器自己从 GHCR 拉取，CI 不登录服务器，可以从仓库设置里删掉它们。

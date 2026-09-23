@@ -2,7 +2,7 @@
 
 + [调整] 生产后端改为适配 ebcloud 容器实例（无 Docker/systemd、入站 SSH 不稳定）：CI 构建 agent-api 运行包按 `sha-<commit>` 推到 GHCR 并移动 `:main`，服务器 updater 主动拉取、pm2 运行，本机 health 失败自动回退；运行时、数据、密钥全部放在持久盘 `/root/data/zmj/coresearch`，服务器上不再有源码。回滚改为把 `:main` 指回旧版本。
 
-+ [新增] 数据库 migration 纳入 CI：迁到仓库根 `supabase/migrations/`（Supabase CLI 布局），部署时先 `supabase db push` 再发布后端；首次接入需按 `supabase/README.md` 做一次性基线。
++ [新增] 数据库 migration 纳入 CI：迁到仓库根 `supabase/migrations/`（Supabase CLI 布局），部署时先 `supabase db push` 再发布后端；文件版本号与生产库执行记录逐条对齐（含早期草案 schema 的 4 条），开启后无需补登记。
 
 + [新增] GitHub Actions 自动化部署 agent-api：push main 后依次 typecheck/test、构建镜像推 GHCR、SSH 部署到服务器 Docker Compose、公网 health 校验部署版本与本次 commit 一致，失败自动停止在当前阶段。
 

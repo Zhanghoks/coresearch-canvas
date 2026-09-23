@@ -54,7 +54,7 @@ jobs:
         id: gate
         run: |
           if [ "${{ vars.SUPABASE_MIGRATIONS_ENABLED }}" != "true" ]; then
-            echo "::warning::SUPABASE_MIGRATIONS_ENABLED 不是 true，本次不执行 migration。完成 supabase/README.md 的一次性基线后再开启。"
+            echo "::warning::SUPABASE_MIGRATIONS_ENABLED 不是 true，本次不执行 migration。开启步骤见 supabase/README.md。"
             echo "migration：**未接入 CI，已跳过**（见 supabase/README.md）" >> "$GITHUB_STEP_SUMMARY"
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else

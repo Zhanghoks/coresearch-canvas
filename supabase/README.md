@@ -13,30 +13,22 @@ supabase db push             # 按版本号顺序执行，并记入 supabase_mig
 
 执行记录在远端 `supabase_migrations.schema_migrations` 表里，已执行的版本不会再跑。
 
-`migrate` job 受 GitHub Variable `SUPABASE_MIGRATIONS_ENABLED` 控制：不是 `true` 时 job 会打一条 warning 并跳过（不静默，Actions 页面可见）。首次接入必须先做下面的「一次性基线」，再把它设成 `true`。
+`migrate` job 受 GitHub Variable `SUPABASE_MIGRATIONS_ENABLED` 控制：不是 `true` 时 job 会打一条 warning 并跳过（不静默，Actions 页面可见）。
 
-## 一次性基线（只做一次）
+## 与生产库的对齐状态
 
-`20260901000001`–`20260901000008`（原 `001`–`008`）当初是手工在 SQL Editor 执行的，远端没有执行记录。直接 `db push` 会把它们再跑一遍，而这些 SQL 大多不可重复执行，会报错。
+本目录的 12 个文件与生产库 `supabase_migrations.schema_migrations` 中的 12 条记录**版本号一一对应、内容一致**
+（去掉注释和空白后逐条比对 md5，2026-09-23 核对）。因此不需要 `migration repair`，开启 CI 后第一次
+`db push --dry-run` 应显示没有待执行的 migration。
 
-先把它们登记为「已执行」：
+- 版本号就是生产库里记录的执行时间，所以文件顺序和最初的 `001`–`008` 编号不同（例如 `sessions` 在 `artifacts_and_assets` 之前）。这是生产库真实的执行顺序，不要改名。
+- 前 4 个（`init`、`rls`、`rls_role_and_policy_fix`、`drop_empty_draft_schema`）是早期草案 schema，建出来之后又被整体删除。保留它们是为了让本地与生产历史完全一致。`drop_empty_draft_schema` 没有删掉枚举类型 `research_entity_kind` 和角色 `coresearch_app`，它们仍留在生产库里，当前代码不使用。
 
-```bash
-# SUPABASE_DB_URL：Dashboard → Connect → Session pooler 的连接串，密码要 percent-encode
-supabase migration repair --db-url "$SUPABASE_DB_URL" --status applied \
-  20260901000001 20260901000002 20260901000003 20260901000004 \
-  20260901000005 20260901000006 20260901000007 20260901000008
+开启步骤：
 
-supabase migration list --db-url "$SUPABASE_DB_URL"   # Local 与 Remote 两列都应有这 8 个版本
-supabase db push --dry-run --db-url "$SUPABASE_DB_URL" # 应显示没有待执行的 migration
-```
-
-如果某个版本其实**没有**在生产库执行过（例如 `002_codex_runtime` 只在用 Codex 时才跑），不要把它登记为 applied，让 CI 去执行它。
-
-完成后在 GitHub 仓库设置：
-
-- Environment `production` 的 Secret `SUPABASE_DB_URL`
-- Repository Variable `SUPABASE_MIGRATIONS_ENABLED=true`
+1. GitHub → Settings → Environments → `production` → 添加 Secret `SUPABASE_DB_URL`（Dashboard → Connect → Session pooler 连接串，密码 percent-encode）。
+2. 本地先确认一次：`supabase db push --dry-run --db-url "$SUPABASE_DB_URL"` 应显示没有待执行的 migration。
+3. 添加 Repository Variable `SUPABASE_MIGRATIONS_ENABLED=true`。
 
 ## 执行顺序
 

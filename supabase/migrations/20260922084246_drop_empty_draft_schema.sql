@@ -1,0 +1,16 @@
+drop function if exists public.canvas_visible_to_auth(uuid) cascade;
+drop table if exists public.canvas_deltas cascade;
+drop table if exists public.canvas_projections cascade;
+drop table if exists public.canvas_edges cascade;
+drop table if exists public.canvas_layout cascade;
+drop table if exists public.canvas_nodes cascade;
+drop table if exists public.canvases cascade;
+drop table if exists public.proposals cascade;
+drop table if exists public.research_relations cascade;
+drop table if exists public.research_entity_revisions cascade;
+drop table if exists public.research_entities cascade;
+drop table if exists public.agent_messages cascade;
+drop table if exists public.agent_runs cascade;
+drop table if exists public.agent_threads cascade;
+drop table if exists public.project_members cascade;
+drop table if exists public.projects cascade;

@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { AppError, canvasRevisionConflict } from "./errors.js";
+import { AppError } from "./errors.js";
 import { assertNotSelfRelation } from "./research-rules.js";
+import type { RunScope, RunWrites } from "./run-writes.js";
 import type { ResearchStore } from "./store.js";
 import { PI_SESSION_STORAGE_VERSION, type AgentRunStatus, type CanvasEdgeProjection, type CanvasNodeProjection, type CanvasProjection, type CanvasProjectionInput, type CanvasViewportProjection, type ConversationSession, type JsonObject, type NewRuntimeEvent, type RequestContext, type ResearchEntityType, type ResearchRevisionInput, type ResearchRevisionStatus } from "./types.js";
 
@@ -325,15 +326,119 @@ export class SupabaseResearchStore implements ResearchStore {
     }
 }
 
-function databaseError(error: { code?: string; message: string; details?: string | null }) {
-    if (error.code === "P0409" && error.message === "canvas_revision_conflict") return canvasRevisionConflict(Number(error.details));
-    if (error.code === "22023" && ["invalid_projection", "duplicate_projection_id", "projection_entity_not_in_project", "invalid_canvas_snapshot"].includes(error.message)) {
-        return new AppError("画布数据无效", 400, error.message === "invalid_canvas_snapshot" ? "invalid_canvas_snapshot" : "invalid_projection");
+const CONVERSATION_COLUMNS = "id,project_id,owner_user_id,title,status,session_revision,codex_thread_id,created_at,updated_at";
+
+/**
+ * 运行期间的写操作，走 service role（绕过 RLS），因此每条写都用运行开始时已确认的
+ * userId / projectId / conversationId / runId 做显式过滤；传入的 id 与范围不一致直接拒绝，
+ * 不提供任何「按任意 id 写」的入口。用户 JWT 过期（长运行）不影响这些写。
+ */
+export class ServiceRoleRunWriter implements RunWrites {
+    constructor(private readonly admin: SupabaseClient, private readonly scope: RunScope) {}
+
+    async appendEvent(ctx: RequestContext, event: NewRuntimeEvent) {
+        this.assertScope(ctx, event.conversationId, event.runId);
+        if (event.projectId !== this.scope.ctx.projectId || event.canvasWorkspaceId !== this.scope.ctx.canvasWorkspaceId) throw scopeViolation();
+        const { data, error } = await this.admin.from("agent_events").insert({
+            run_id: this.scope.runId,
+            project_id: this.scope.ctx.projectId,
+            canvas_workspace_id: this.scope.ctx.canvasWorkspaceId,
+            conversation_id: this.scope.conversationId,
+            thread_id: event.threadId,
+            turn_id: event.turnId,
+            item_id: event.itemId,
+            type: event.type,
+            protocol_version: event.protocolVersion,
+            payload: event.payload,
+        }).select().single();
+        if (error) throw databaseError(error);
+        return runtimeEvent(row(data));
     }
-    if (error.code === "23505") return new AppError("当前对话已有任务正在运行", 409, "conversation_busy");
-    if (error.code === "P0409") return new AppError(error.message === "conversation_not_active" ? "对话已归档" : "当前对话仍在运行", 409, error.message === "conversation_not_active" ? "conversation_archived" : "conversation_busy");
-    if (error.code === "42501") return new AppError("无权访问该资源", 403, "forbidden");
-    return new AppError(error.message, 500, "database_error");
+
+    async finishRun(ctx: RequestContext, runId: string, status: Exclude<AgentRunStatus, "running">) {
+        this.assertScope(ctx, this.scope.conversationId, runId);
+        const { data, error } = await this.admin.from("agent_runs").update({ status, completed_at: new Date().toISOString() })
+            .eq("id", this.scope.runId).eq("conversation_id", this.scope.conversationId).eq("actor_user_id", this.scope.ctx.userId)
+            .select("id").maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("找不到运行记录", 404, "run_not_found");
+    }
+
+    async saveConversationSession(ctx: RequestContext, conversationId: string, session: ConversationSession) {
+        this.assertScope(ctx, conversationId, this.scope.runId);
+        if (session.storageVersion !== PI_SESSION_STORAGE_VERSION) throw new AppError("不支持当前对话存储版本，已拒绝覆盖", 409, "unsupported_session_storage_version");
+        // 与 save_conversation_session 相同的比较并交换：只有 revision 未变才写入并 +1。
+        const { data, error } = await this.admin.from("conversations")
+            .update({ session_header: session.header, session_entries: session.entries, session_revision: session.revision + 1 })
+            .eq("id", this.scope.conversationId).eq("project_id", this.scope.ctx.projectId).eq("owner_user_id", this.scope.ctx.userId)
+            .eq("session_revision", session.revision)
+            .select("session_revision").maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("对话已在其他运行中更新", 409, "session_revision_conflict");
+        return number(row(data).session_revision);
+    }
+
+    async bindCodexThread(ctx: RequestContext, conversationId: string, threadId: string) {
+        this.assertScope(ctx, conversationId, this.scope.runId);
+        const { data, error } = await this.admin.from("conversations").update({ codex_thread_id: threadId })
+            .eq("id", this.scope.conversationId).eq("project_id", this.scope.ctx.projectId).eq("owner_user_id", this.scope.ctx.userId)
+            .select(CONVERSATION_COLUMNS).maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("找不到对话", 404, "conversation_not_found");
+        return conversation(row(data));
+    }
+
+    async bindCodexTurn(ctx: RequestContext, conversationId: string, runId: string, turnId: string) {
+        this.assertScope(ctx, conversationId, runId);
+        const { data, error } = await this.admin.from("agent_runs").update({ codex_turn_id: turnId })
+            .eq("id", this.scope.runId).eq("conversation_id", this.scope.conversationId).eq("actor_user_id", this.scope.ctx.userId)
+            .select().maybeSingle();
+        if (error) throw databaseError(error);
+        if (!data) throw new AppError("找不到运行记录", 404, "run_not_found");
+        return run(row(data));
+    }
+
+    private assertScope(ctx: RequestContext, conversationId: string, runId: string) {
+        const scope = this.scope;
+        if (ctx.userId !== scope.ctx.userId || ctx.projectId !== scope.ctx.projectId || ctx.canvasWorkspaceId !== scope.ctx.canvasWorkspaceId || conversationId !== scope.conversationId || runId !== scope.runId) throw scopeViolation();
+    }
+}
+
+function scopeViolation() {
+    return new AppError("运行写入超出了本次运行的范围", 403, "run_scope_violation");
+}
+
+type PostgrestFailure = { code?: string; message: string; details?: string | null; hint?: string | null };
+
+// 把数据库错误翻译成对客户端安全、可区分的错误码；原始错误挂在 internal 上，只进服务端日志。
+export function databaseError(error: PostgrestFailure) {
+    const fail = (message: string, status: number, code: string) => new AppError(message, status, code, undefined, error);
+    switch (error.code) {
+        case "P0409":
+            if (error.message === "canvas_revision_conflict") return new AppError("画布已在别处更新", 409, "canvas_revision_conflict", { currentRevision: Number(error.details) }, error);
+            if (error.message === "conversation_not_active") return fail("对话已归档", 409, "conversation_archived");
+            return fail("当前对话仍在运行", 409, "conversation_busy");
+        case "23505":
+            if (error.message.includes("one_active_run_per_conversation")) return fail("当前对话已有任务正在运行", 409, "conversation_busy");
+            return fail("数据已存在", 409, "duplicate");
+        case "22023":
+            if (["invalid_projection", "duplicate_projection_id", "projection_entity_not_in_project"].includes(error.message)) return fail("画布数据无效", 400, "invalid_projection");
+            if (error.message === "invalid_canvas_snapshot") return fail("画布快照无效", 400, "invalid_canvas_snapshot");
+            return fail("请求数据无效", 400, "invalid_request");
+        case "22P02":
+        case "23502":
+        case "23514":
+            return fail("请求数据无效", 400, "invalid_request");
+        case "23503":
+            return fail("引用的数据不存在", 400, "invalid_reference");
+        case "42501":
+            return fail("无权访问该资源", 403, "forbidden");
+        case "PGRST301":
+        case "PGRST303":
+            return fail("登录已过期，请重新登录", 401, "auth_expired");
+        default:
+            return fail("数据库错误", 500, "database_error");
+    }
 }
 
 function project(value: Record<string, unknown>) {

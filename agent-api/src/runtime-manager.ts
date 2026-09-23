@@ -1,20 +1,27 @@
 import { AppError } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import type { AgentRuntime, RuntimeAdapter } from "./runtime.js";
+import { runScopedStore, userStoreRunWrites, type RunWritesFactory } from "./run-writes.js";
 import type { ResearchStore } from "./store.js";
 import { AGENT_PROTOCOL_VERSION, type NewRuntimeEvent, type RequestContext, type RuntimeEventType } from "./types.js";
 
 export class RuntimeManager implements AgentRuntime {
     private readonly active = new Map<string, AbortController>();
 
-    constructor(private readonly adapter: RuntimeAdapter, private readonly hub: EventHub) {}
+    constructor(
+        private readonly adapter: RuntimeAdapter,
+        private readonly hub: EventHub,
+        private readonly runWrites: RunWritesFactory = userStoreRunWrites,
+    ) {}
 
-    async runTurn(store: ResearchStore, ctx: RequestContext, input: { conversationId: string; prompt: string }) {
+    async runTurn(userStore: ResearchStore, ctx: RequestContext, input: { conversationId: string; prompt: string }) {
         const prompt = input.prompt.trim();
         if (!prompt) throw new AppError("消息不能为空", 400, "prompt_required");
-        const conversation = await store.readConversation(ctx, input.conversationId);
+        // 归属在这里用用户 JWT 确认（RLS）；之后本次运行的写入改走 runWrites，不受 JWT 过期影响。
+        const conversation = await userStore.readConversation(ctx, input.conversationId);
         if (conversation.status !== "active") throw new AppError("对话已归档", 409, "conversation_archived");
-        const run = await store.beginRun(ctx, input.conversationId);
+        const run = await userStore.beginRun(ctx, input.conversationId);
+        const store = runScopedStore(userStore, this.runWrites({ ctx, conversationId: input.conversationId, runId: run.id }, userStore));
         const controller = new AbortController();
         this.active.set(run.id, controller);
         try {

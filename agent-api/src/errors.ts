@@ -4,6 +4,8 @@ export class AppError extends Error {
         readonly statusCode: number,
         readonly code: string,
         readonly details?: Record<string, unknown>,
+        /** 原始错误（例如 PostgREST/Postgres 错误），只写服务端日志，不返回给客户端。 */
+        readonly internal?: unknown,
     ) {
         super(message);
         this.name = "AppError";

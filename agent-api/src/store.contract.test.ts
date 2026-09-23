@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { after, describe, test } from "node:test";
 
 import { AppError } from "./errors.js";
-import { inMemoryHarness, supabaseHarness, supabaseTestEnv, type StoreHarness, type TestUser } from "./testing/store-harness.js";
+import { ServiceRoleRunWriter } from "./supabase-store.js";
+import { adminClient, inMemoryHarness, supabaseHarness, supabaseTestEnv, type StoreHarness, type TestUser } from "./testing/store-harness.js";
 import { AGENT_PROTOCOL_VERSION, PI_SESSION_STORAGE_VERSION, type NewRuntimeEvent, type RequestContext, type ResearchRevisionInput } from "./types.js";
 
 // 同一套场景同时跑内存实现和真实 Supabase（设置 SUPABASE_TEST_URL 时）。
@@ -135,6 +136,50 @@ for (const harness of harnesses) {
             const revisions = await user.store.listEntityRevisions(ctx, entity.id);
             assert.deepEqual(revisions.map((item) => [item.revision, item.status]), [[1, "superseded"], [2, "confirmed"]]);
             assert.equal((await user.store.readEntity(ctx, entity.id)).head?.revision, 2);
+        });
+    });
+}
+
+if (env) {
+    describe("ServiceRoleRunWriter（service role，仅真实 Supabase）", () => {
+        const harness = supabaseHarness(env);
+        const admin = adminClient(env);
+        after(() => harness.cleanup());
+
+        test("只能写本次运行范围内的事件、终态与 session，写入对用户可见", async () => {
+            const { user, ctx } = await projectContext(harness);
+            const conversation = await user.store.createConversation(ctx, "C");
+            const run = await user.store.beginRun(ctx, conversation.id);
+            const writer = new ServiceRoleRunWriter(admin, { ctx, conversationId: conversation.id, runId: run.id });
+
+            await writer.appendEvent(ctx, event(ctx, conversation.id, run.id, "run.started"));
+            const session = await user.store.loadConversationSession(ctx, conversation.id);
+            assert.equal(await writer.saveConversationSession(ctx, conversation.id, { ...session, entries: [{ n: 1 }] }), 1);
+            await rejectsWith(() => writer.saveConversationSession(ctx, conversation.id, { ...session, entries: [{ n: 2 }] }), 409, "session_revision_conflict");
+            await writer.finishRun(ctx, run.id, "completed");
+
+            assert.deepEqual((await user.store.listEvents(ctx, conversation.id, 0)).map((item) => item.type), ["run.started"]);
+            assert.equal((await user.store.readRun(ctx, conversation.id, run.id)).status, "completed");
+            assert.deepEqual((await user.store.loadConversationSession(ctx, conversation.id)).entries, [{ n: 1 }]);
+        });
+
+        test("拒绝范围之外的 run、对话、项目；伪造范围也写不到别人的运行", async () => {
+            const alice = await projectContext(harness);
+            const bob = await projectContext(harness);
+            const aliceConversation = await alice.user.store.createConversation(alice.ctx, "A");
+            const aliceRun = await alice.user.store.beginRun(alice.ctx, aliceConversation.id);
+            const otherRun = await alice.user.store.createConversation(alice.ctx, "A2").then((item) => alice.user.store.beginRun(alice.ctx, item.id));
+            const writer = new ServiceRoleRunWriter(admin, { ctx: alice.ctx, conversationId: aliceConversation.id, runId: aliceRun.id });
+
+            await rejectsWith(() => writer.finishRun(alice.ctx, otherRun.id, "completed"), 403, "run_scope_violation");
+            await rejectsWith(() => writer.appendEvent(alice.ctx, event(alice.ctx, aliceConversation.id, otherRun.id, "run.started")), 403, "run_scope_violation");
+            await rejectsWith(() => writer.appendEvent(bob.ctx, event(bob.ctx, aliceConversation.id, aliceRun.id, "run.started")), 403, "run_scope_violation");
+
+            // 即使构造出一个声称属于 Bob 的范围，显式的 actor/owner 过滤也命中不到 Alice 的运行。
+            const forged = new ServiceRoleRunWriter(admin, { ctx: { ...alice.ctx, userId: bob.user.id }, conversationId: aliceConversation.id, runId: aliceRun.id });
+            await rejectsWith(() => forged.finishRun({ ...alice.ctx, userId: bob.user.id }, aliceRun.id, "completed"), 404, "run_not_found");
+            assert.equal((await alice.user.store.readRun(alice.ctx, aliceConversation.id, aliceRun.id)).status, "running");
+            await writer.finishRun(alice.ctx, aliceRun.id, "aborted");
         });
     });
 }

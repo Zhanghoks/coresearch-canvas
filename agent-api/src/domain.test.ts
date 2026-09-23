@@ -132,6 +132,32 @@ test("Agent 运行失败时服务端记录原始错误，推给前端的 payload
     assert.equal(logged.mock.callCount(), 0);
 });
 
+test("用户 JWT 在运行中途过期时，运行期间的写入仍经 runWrites 完成", async () => {
+    const store = new InMemoryResearchStore();
+    const project = await store.createProject("alice", "A");
+    const ctx = { userId: "alice", projectId: project.id, canvasWorkspaceId: project.canvasWorkspaceId };
+    const conversation = await store.createConversation(ctx, "Long run");
+    // 模拟 JWT 过期：运行开始后，用户 store 的写全部 401。
+    let expired = false;
+    const expiringUserStore = Object.create(store) as InMemoryResearchStore;
+    for (const method of ["appendEvent", "finishRun", "saveConversationSession"] as const) {
+        const original = store[method].bind(store) as (...args: unknown[]) => Promise<unknown>;
+        (expiringUserStore as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => expired ? Promise.reject(new AppError("JWT expired", 401, "auth_expired")) : original(...args);
+    }
+    const adapter: RuntimeAdapter = {
+        execute: async (input) => {
+            expired = true;
+            await input.emit({ type: "assistant.delta", itemId: "m1", payload: { delta: "still here" } });
+        },
+    };
+    const runtime = new RuntimeManager(adapter, new EventHub(), () => store);
+    await runtime.runTurn(expiringUserStore, ctx, { conversationId: conversation.id, prompt: "hi" });
+    await waitForTerminal(store, ctx, conversation.id);
+
+    const events = await store.listEvents(ctx, conversation.id, 0);
+    assert.deepEqual(events.map((event) => event.type), ["run.started", "assistant.delta", "run.completed"]);
+});
+
 async function waitForTerminal(store: InMemoryResearchStore, ctx: { userId: string; projectId: string; canvasWorkspaceId: string }, conversationId: string) {
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {
@@ -245,4 +271,26 @@ test("画布投影按 baseRevision 乐观锁保存，断边被丢弃，插件节
     await assert.rejects(() => research.saveProjection(ctx, 0, { ...body, nodes: [] }), (error) =>
         error instanceof AppError && error.code === "canvas_revision_conflict" && error.details?.currentRevision === 1);
     assert.equal((await research.readProjection(ctx)).nodes.length, 2);
+});
+
+test("数据库错误映射：客户端拿到可区分的错误码，原始信息只留在 internal", async () => {
+    const { databaseError } = await import("./supabase-store.js");
+    const cases: Array<[Record<string, unknown>, number, string]> = [
+        [{ code: "23505", message: 'duplicate key value violates unique constraint "one_active_run_per_conversation"' }, 409, "conversation_busy"],
+        [{ code: "23505", message: 'duplicate key value violates unique constraint "research_relations_source_entity_id_target_entity_id_relation_type_key"' }, 409, "duplicate"],
+        [{ code: "P0409", message: "canvas_revision_conflict", details: "7" }, 409, "canvas_revision_conflict"],
+        [{ code: "P0409", message: "conversation_not_active" }, 409, "conversation_archived"],
+        [{ code: "42501", message: "permission denied for table project_skills" }, 403, "forbidden"],
+        [{ code: "PGRST303", message: "JWT issued at future" }, 401, "auth_expired"],
+        [{ code: "22P02", message: 'invalid input syntax for type uuid: "x"' }, 400, "invalid_request"],
+        [{ code: "XX000", message: "internal pg detail that must not leak" }, 500, "database_error"],
+    ];
+    for (const [raw, status, code] of cases) {
+        const error = databaseError(raw as { code: string; message: string });
+        assert.equal(error.statusCode, status, String(raw.code));
+        assert.equal(error.code, code, String(raw.code));
+        assert.equal(error.internal, raw);
+        assert.ok(!error.message.includes("pg detail"), "原始数据库信息不能出现在返回给客户端的 message 里");
+    }
+    assert.deepEqual(databaseError({ code: "P0409", message: "canvas_revision_conflict", details: "7" }).details, { currentRevision: 7 });
 });

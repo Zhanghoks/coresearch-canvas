@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+
+import { createClient } from "@supabase/supabase-js";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 
@@ -14,23 +17,31 @@ import { ResearchModule } from "./research-module.js";
 import type { RuntimeAdapter } from "./runtime.js";
 import { RuntimeManager } from "./runtime-manager.js";
 import { RuntimeTokenService } from "./runtime-token.js";
-import { SupabaseResearchStore } from "./supabase-store.js";
+import { ServiceRoleRunWriter, SupabaseResearchStore } from "./supabase-store.js";
+import type { RunWritesFactory } from "./run-writes.js";
 import { AGENT_PROTOCOL_VERSION, type CanvasWorkspace, type JsonObject, type RuntimeEvent } from "./types.js";
 
-export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adapter?: RuntimeAdapter } = {}) {
+export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adapter?: RuntimeAdapter; runWrites?: RunWritesFactory } = {}) {
     const startedAt = new Date().toISOString();
     const app = express();
     const auth = new SupabaseAuth(config.supabaseUrl, config.supabasePublishableKey);
     const hub = new EventHub();
     const canvas = deps.canvas || new CanvasBridge();
     const adapter = deps.adapter || createRuntimeAdapter(config, canvas);
-    const runtime = new RuntimeManager(adapter, hub);
+    const runtime = new RuntimeManager(adapter, hub, deps.runWrites || serviceRoleRunWrites(config));
     const codex = adapter instanceof CodexRuntimeAdapter ? adapter : null;
     const invites = new InviteRateLimiter();
     const inviteAdmin = createInviteAdmin(config.supabaseUrl, config.supabaseSecretKey);
 
+    // 每个请求一个 ID：错误日志里带上它，响应头也带回去，用户反馈问题时能直接对上服务端日志。
+    app.use((_request, response, next) => {
+        const requestId = randomUUID();
+        response.locals.requestId = requestId;
+        response.setHeader("X-Request-Id", requestId);
+        next();
+    });
     // 跨域时浏览器默认不让前端读自定义响应头，前端连 SSE 要校验 X-Agent-Protocol-Version，必须显式暴露。
-    app.use(cors({ origin: (origin, callback) => callback(null, !origin || config.origins.includes(origin)), exposedHeaders: ["X-Agent-Protocol-Version"] }));
+    app.use(cors({ origin: (origin, callback) => callback(null, !origin || config.origins.includes(origin)), exposedHeaders: ["X-Agent-Protocol-Version", "X-Request-Id"] }));
     app.use(express.json());
     app.get("/health", (_request, response) => response.json({
         ok: true,
@@ -248,11 +259,46 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
         response.status(204).end();
     }));
 
-    app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    app.use((error: unknown, request: Request, response: Response, _next: NextFunction) => {
         const status = error instanceof AppError ? error.statusCode : 500;
-        response.status(status).json({ error: { code: error instanceof AppError ? error.code : "internal_error", message: error instanceof AppError ? error.message : "Agent API 内部错误", ...(error instanceof AppError && error.details ? { details: error.details } : {}) } });
+        const code = error instanceof AppError ? error.code : "internal_error";
+        const requestId = typeof response.locals.requestId === "string" ? response.locals.requestId : undefined;
+        // 5xx、401、403 一律记日志：权限类错误可能是 grant/RLS 写错，而不是用户越权。
+        if (status >= 500 || status === 401 || status === 403) logRequestError({ requestId, method: request.method, path: request.route?.path ?? request.path, status, code, error });
+        response.status(status).json({
+            error: {
+                code,
+                message: error instanceof AppError ? error.message : "Agent API 内部错误",
+                ...(error instanceof AppError && error.details ? { details: error.details } : {}),
+                ...(requestId ? { requestId } : {}),
+            },
+        });
     });
     return app;
+}
+
+// 单行 JSON 写 stdout，pm2 直接收集。只记错误码与数据库诊断字段，不记请求体和 token。
+function logRequestError(entry: { requestId?: string; method: string; path: string; status: number; code: string; error: unknown }) {
+    const cause = entry.error instanceof AppError ? entry.error.internal : entry.error;
+    const database = cause && typeof cause === "object" && "code" in cause
+        ? { code: (cause as { code?: unknown }).code, message: (cause as { message?: unknown }).message, details: (cause as { details?: unknown }).details, hint: (cause as { hint?: unknown }).hint }
+        : undefined;
+    console.error(JSON.stringify({
+        level: "error",
+        at: new Date().toISOString(),
+        requestId: entry.requestId,
+        method: entry.method,
+        path: entry.path,
+        status: entry.status,
+        code: entry.code,
+        ...(database ? { database } : {}),
+        ...(!database && cause instanceof Error ? { error: cause.message, stack: cause.stack } : {}),
+    }));
+}
+
+function serviceRoleRunWrites(config: AppConfig): RunWritesFactory {
+    const admin = createClient(config.supabaseUrl, config.supabaseSecretKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    return (scope) => new ServiceRoleRunWriter(admin, scope);
 }
 
 function createRuntimeAdapter(config: AppConfig, canvas: CanvasBridge): RuntimeAdapter {

@@ -277,10 +277,30 @@ export class SupabaseResearchStore implements ResearchStore {
         return (data || []).map((value) => skill(row(value)));
     }
 
+    // 不能用 upsert：ON CONFLICT DO UPDATE 会把 project_id 也写进 SET，而 authenticated 只被授予
+    // update (name, definition, enabled)，Postgres 按 SET 列校验权限，连首次创建都会 42501。
     async saveSkill(ctx: RequestContext, input: { name: string; definition: string; enabled: boolean }) {
-        const { data, error } = await this.client.from("project_skills").upsert({ project_id: ctx.projectId, ...input }, { onConflict: "project_id,name" }).select().single();
+        const updated = await this.updateSkill(ctx, input);
+        if (updated) return updated;
+        const { data, error } = await this.client.from("project_skills").insert({ project_id: ctx.projectId, ...input }).select().single();
+        if (!error) return skill(row(data));
+        // 并发创建同名 Skill：对方先插入成功，这里改为更新。
+        if (error.code === "23505") {
+            const raced = await this.updateSkill(ctx, input);
+            if (raced) return raced;
+        }
+        throw databaseError(error);
+    }
+
+    private async updateSkill(ctx: RequestContext, input: { name: string; definition: string; enabled: boolean }) {
+        const { data, error } = await this.client.from("project_skills")
+            .update({ definition: input.definition, enabled: input.enabled })
+            .eq("project_id", ctx.projectId)
+            .eq("name", input.name)
+            .select()
+            .maybeSingle();
         if (error) throw databaseError(error);
-        return skill(row(data));
+        return data ? skill(row(data)) : null;
     }
 
     async deleteSkill(ctx: RequestContext, name: string) {

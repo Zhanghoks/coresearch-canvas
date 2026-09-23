@@ -296,19 +296,24 @@ async function harness(options: { holdTurns?: boolean; failInitialize?: boolean;
     return { adapter, store, canvas, ctxA, ctxB, conversationA, conversationA2, conversationB, spawns, transports, runtime };
 }
 
+// 按墙钟时间等待而不是固定 tick 数：CI runner 慢时 200 个 setImmediate 不够 runtime 走完真实异步 I/O。
+const WAIT_MS = 5_000;
+
 async function until(predicate: () => boolean) {
-    for (let i = 0; i < 200; i += 1) {
+    const deadline = Date.now() + WAIT_MS;
+    while (Date.now() < deadline) {
         if (predicate()) return;
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 5));
     }
     throw new Error("条件没有满足");
 }
 
 async function settled(store: InMemoryResearchStore, ctx: { userId: string; projectId: string; canvasWorkspaceId: string }, conversationId: string, terminals: number, type = "run.completed") {
-    for (let i = 0; i < 200; i += 1) {
+    const deadline = Date.now() + WAIT_MS;
+    while (Date.now() < deadline) {
         const events = await store.listEvents(ctx, conversationId, 0);
         if (events.filter((event) => event.type === type).length >= terminals) return;
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 5));
     }
     throw new Error("run 没有结束");
 }

@@ -1,6 +1,9 @@
 import { AGENT_API_URL } from "@/constant/runtime-config";
 
 const baseUrl = AGENT_API_URL.replace(/\/$/, "");
+// ngrok Free 会给浏览器发出的 GET 返回一个警告页（text/html、没有 CORS 头），只对 ngrok 主机带上跳过头。
+const NGROK_HOST = /\.ngrok(-free)?\.(app|dev|io)$/;
+const ngrokHeaders: Record<string, string> = baseUrl && NGROK_HOST.test(new URL(baseUrl).hostname) ? { "ngrok-skip-browser-warning": "1" } : {};
 
 export type HostedProject = { id: string; ownerUserId: string; name: string; canvasWorkspaceId: string; createdAt: string; updatedAt: string };
 export type HostedConversation = { id: string; projectId: string; ownerUserId: string; title: string; status: "active" | "archived"; sessionRevision: number; createdAt: string; updatedAt: string };
@@ -45,7 +48,7 @@ export async function registerHostedAccount(inviteCode: string, nickname: string
     if (!baseUrl) throw new Error("托管 Agent API 尚未配置");
     const response = await fetch(`${baseUrl}/v1/auth/register`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...ngrokHeaders },
         body: JSON.stringify({ inviteCode, nickname, password }),
     });
     const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
@@ -54,7 +57,7 @@ export async function registerHostedAccount(inviteCode: string, nickname: string
 
 async function request<T = unknown>(token: string, path: string, init: RequestInit = {}): Promise<T> {
     if (!baseUrl) throw new Error("托管 Agent API 尚未配置");
-    const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...init.headers } });
+    const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...ngrokHeaders, ...init.headers } });
     if (!response.ok) {
         const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
         throw new Error(body?.error?.message || `Agent API 请求失败（${response.status}）`);
@@ -65,7 +68,7 @@ async function request<T = unknown>(token: string, path: string, init: RequestIn
 
 async function streamEvents(token: string, projectId: string, conversationId: string, after: number, signal: AbortSignal, onEvent: (event: HostedRuntimeEvent) => void) {
     if (!baseUrl) throw new Error("托管 Agent API 尚未配置");
-    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/conversations/${conversationId}/events?after=${after}`, { headers: { Authorization: `Bearer ${token}` }, signal });
+    const response = await fetch(`${baseUrl}/v1/projects/${projectId}/conversations/${conversationId}/events?after=${after}`, { headers: { Authorization: `Bearer ${token}`, ...ngrokHeaders }, signal });
     if (!response.ok || !response.body) throw new Error(`Agent 事件连接失败（${response.status}）`);
     if (response.headers.get("X-Agent-Protocol-Version") !== "1") throw new Error("Agent 通信协议版本不兼容");
     const reader = response.body.getReader();

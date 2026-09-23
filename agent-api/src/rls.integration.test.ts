@@ -4,12 +4,13 @@ import test from "node:test";
 
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 
-const enabled = process.env.RUN_SUPABASE_RLS_TESTS === "1";
+import { supabaseTestEnv } from "./testing/store-harness.js";
 
-test("Supabase RLS isolates users and projects", { skip: !enabled }, async () => {
-    const url = required("SUPABASE_URL");
-    const publishableKey = required("SUPABASE_PUBLISHABLE_KEY");
-    const secretKey = required("SUPABASE_SECRET_KEY");
+// 只跑在本地/CI 的 supabase start 上；supabaseTestEnv 拒绝生产 ref。
+const env = supabaseTestEnv();
+
+test("Supabase RLS isolates users and projects", { skip: !env }, async () => {
+    const { url, publishableKey, secretKey } = env!;
     const admin = client(url, secretKey);
     const suffix = crypto.randomUUID();
     const password = `Rls-${suffix}`;
@@ -148,10 +149,4 @@ async function createEntity(database: SupabaseClient, projectId: string, type: s
     assert.ifError(error);
     assert.ok(Array.isArray(data) && data.length === 1);
     return data[0] as { id: string };
-}
-
-function required(name: string) {
-    const value = process.env[name]?.trim();
-    if (!value) throw new Error(`缺少环境变量 ${name}`);
-    return value;
 }

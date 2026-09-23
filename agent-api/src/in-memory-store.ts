@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { AppError } from "./errors.js";
+import { assertNotSelfRelation } from "./research-rules.js";
 import type { ResearchStore } from "./store.js";
 import { PI_SESSION_STORAGE_VERSION, type AgentRun, type AgentRunStatus, type CanvasProjectionInput, type CanvasWorkspace, type Conversation, type ConversationSession, type JsonObject, type NewRuntimeEvent, type Project, type ProjectSkill, type RequestContext, type ResearchEntity, type ResearchEntityRevision, type ResearchEntityType, type ResearchRelation, type ResearchRevisionInput, type RuntimeEvent } from "./types.js";
 
@@ -147,6 +148,7 @@ export class InMemoryResearchStore implements ResearchStore {
     }
 
     async createRelation(ctx: RequestContext, input: { sourceEntityId: string; targetEntityId: string; relationType: string }) {
+        assertNotSelfRelation(input);
         this.ownedEntity(ctx, input.sourceEntityId);
         this.ownedEntity(ctx, input.targetEntityId);
         const existing = [...this.relations.values()].find((item) =>
@@ -220,7 +222,8 @@ export class InMemoryResearchStore implements ResearchStore {
     }
 
     async beginRun(ctx: RequestContext, conversationId: string) {
-        this.ownedConversation(ctx, conversationId);
+        // 与数据库触发器 agent_runs_require_active_conversation 保持一致。
+        if (this.ownedConversation(ctx, conversationId).status !== "active") throw new AppError("对话已归档", 409, "conversation_archived");
         const existing = [...this.runs.values()].find((run) => run.conversationId === conversationId && run.status === "running");
         if (existing) throw new AppError("当前对话已有任务正在运行", 409, "conversation_busy");
         const run: AgentRun = { id: crypto.randomUUID(), conversationId, actorUserId: ctx.userId, status: "running", codexTurnId: null, startedAt: new Date().toISOString(), completedAt: null };

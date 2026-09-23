@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { AppError } from "./errors.js";
+import { assertNotSelfRelation } from "./research-rules.js";
 import type { ResearchStore } from "./store.js";
 import { PI_SESSION_STORAGE_VERSION, type AgentRunStatus, type CanvasEdgeProjection, type CanvasNodeProjection, type CanvasProjection, type CanvasProjectionInput, type CanvasViewportProjection, type ConversationSession, type JsonObject, type NewRuntimeEvent, type RequestContext, type ResearchEntityType, type ResearchRevisionInput, type ResearchRevisionStatus } from "./types.js";
 
@@ -132,6 +133,7 @@ export class SupabaseResearchStore implements ResearchStore {
     }
 
     async createRelation(ctx: RequestContext, input: { sourceEntityId: string; targetEntityId: string; relationType: string }) {
+        assertNotSelfRelation(input);
         const { data, error } = await this.client.from("research_relations").insert({
             project_id: ctx.projectId,
             source_entity_id: input.sourceEntityId,
@@ -139,8 +141,15 @@ export class SupabaseResearchStore implements ResearchStore {
             relation_type: input.relationType,
             created_by: ctx.userId,
         }).select(RELATION_COLUMNS).single();
-        if (error) throw databaseError(error);
-        return researchRelation(row(data));
+        if (!error) return researchRelation(row(data));
+        // 同一关系重复创建按幂等处理，返回已有那条（唯一约束 source+target+type）。
+        if (error.code === "23505") {
+            const { data: existing, error: readError } = await this.client.from("research_relations").select(RELATION_COLUMNS)
+                .eq("project_id", ctx.projectId).eq("source_entity_id", input.sourceEntityId).eq("target_entity_id", input.targetEntityId).eq("relation_type", input.relationType).maybeSingle();
+            if (readError) throw databaseError(readError);
+            if (existing) return researchRelation(row(existing));
+        }
+        throw databaseError(error);
     }
 
     async deleteRelation(ctx: RequestContext, relationId: string) {

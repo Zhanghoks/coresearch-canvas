@@ -4,7 +4,7 @@ import { Archive, Bot, PanelRightClose, Plus, Send, Settings2, Square, Trash2 } 
 
 import type { CanvasAgentOp } from "@/lib/canvas/canvas-agent-ops";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { hostedAgentApi, type HostedConversation, type HostedProjectSkill, type HostedRuntimeEvent } from "@/services/api/hosted-agent";
+import { hostedAgentApi, isHostedApiError, type HostedConversation, type HostedProjectSkill, type HostedRuntimeEvent } from "@/services/api/hosted-agent";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { AgentChatMessage, AgentPendingToolCard, type AgentChatMessageItem } from "./agent-chat-message";
@@ -40,6 +40,7 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
     const sequenceRef = useRef(0);
     const scrollRef = useRef<HTMLDivElement>(null);
     const protocolErrorRef = useRef(false);
+    const reconnectRef = useRef(0);
     const conversationLoadRef = useRef<{ key: string; promise: Promise<{ items: HostedConversation[]; next: HostedConversation }> } | null>(null);
     const projectId = scope.project?.agentProjectId || "";
 
@@ -93,13 +94,26 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
     useEffect(() => {
         if (!snapshotReady || !scope.token || !projectId || !conversationId) return;
         const controller = new AbortController();
+        let retry: ReturnType<typeof setTimeout> | undefined;
+        // 连接断开（代理超时、网络抖动）后按序号自动续接；收到事件说明连接健康，退避清零。
+        const reconnect = (reason: string) => {
+            if (controller.signal.aborted) return;
+            const attempt = reconnectRef.current++;
+            if (attempt >= 3) setStreamError(reason);
+            retry = setTimeout(() => setStreamAttempt((value) => value + 1), Math.min(15_000, 1_000 * 2 ** attempt));
+        };
         setStreamError("");
-        void hostedAgentApi.streamEvents(scope.token, projectId, conversationId, sequenceRef.current, controller.signal, consumeEvent).then(() => {
-            if (!controller.signal.aborted) setStreamError("事件连接已结束");
-        }).catch((error) => {
-            if (!controller.signal.aborted) setStreamError(error instanceof Error ? error.message : "Agent 事件连接失败");
+        void hostedAgentApi.streamEvents(scope.token, projectId, conversationId, sequenceRef.current, controller.signal, (event) => {
+            reconnectRef.current = 0;
+            consumeEvent(event);
+        }).then(() => reconnect("事件连接已结束，正在重新连接…")).catch((error) => {
+            if (isHostedApiError(error, "project_not_found") && scope.recoverMissingProject(error)) return;
+            reconnect(`${error instanceof Error ? error.message : "Agent 事件连接失败"}，正在重新连接…`);
         });
-        return () => controller.abort();
+        return () => {
+            controller.abort();
+            clearTimeout(retry);
+        };
     }, [conversationId, projectId, scope.token, snapshotReady, streamAttempt]);
 
     useEffect(() => {
@@ -278,6 +292,13 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
             }
             setPendingTool(null);
         } catch (error) {
+            if (isHostedApiError(error, "canvas_tool_call_not_found")) {
+                // 运行已结束（停止、超时或服务重启），这张确认卡片已经过期；续接事件拿到真实终态。
+                setPendingTool(null);
+                setStreamAttempt((value) => value + 1);
+                message.warning("这次画布修改请求已失效（Agent 运行已结束），请重新发送");
+                return;
+            }
             if (!scope.recoverMissingProject(error)) message.error(error instanceof Error ? error.message : "画布操作失败");
         }
     };
@@ -287,6 +308,12 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
         try {
             await hostedAgentApi.abort(scope.token, projectId, conversationId, runId);
         } catch (error) {
+            if (isHostedApiError(error, "run_not_active")) {
+                setRunId("");
+                setPendingTool(null);
+                setStreamAttempt((value) => value + 1);
+                return;
+            }
             message.error(error instanceof Error ? error.message : "停止失败");
         }
     };

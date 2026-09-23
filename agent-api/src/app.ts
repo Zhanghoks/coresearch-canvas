@@ -225,7 +225,12 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
                 cursor = event.sequence;
             }
         });
-        request.on("close", unsubscribe);
+        // ngrok 等代理会断开长时间没有数据的连接（例如等用户确认画布修改的几分钟）；注释行不产生事件。
+        const heartbeat = setInterval(() => response.write(": ping\n\n"), SSE_HEARTBEAT_MS);
+        request.on("close", () => {
+            clearInterval(heartbeat);
+            unsubscribe();
+        });
         for (const event of await scope.store.listEvents(ctx, routeParam(request, "conversationId"), cursor)) {
             writeSse(response, event);
             cursor = event.sequence;
@@ -410,6 +415,8 @@ function optionalNonNegativeInteger(value: unknown) {
     const parsed = typeof value === "string" ? Number(value) : NaN;
     return nonNegativeInteger(parsed, "事件序号无效");
 }
+
+const SSE_HEARTBEAT_MS = 15_000;
 
 function writeSse(response: Response, event: RuntimeEvent) {
     response.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);

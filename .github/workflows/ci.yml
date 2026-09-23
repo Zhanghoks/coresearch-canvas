@@ -66,7 +66,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          added="$(git diff --name-only --diff-filter=A "$BASE" "$HEAD" -- 'agent-api/supabase/migrations/*.sql' || true)"
+          added="$(git diff --name-only --diff-filter=A "$BASE" "$HEAD" -- 'supabase/migrations/*.sql' || true)"
           if [ -z "$added" ]; then
             echo "本次没有新增 migration。" >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -78,9 +78,7 @@ jobs:
             echo "$added"
             echo '```'
             echo
-            echo "migration 目前是**手工**在 Supabase SQL Editor 执行的，且不可重复执行。"
-            echo "合并前请先按文件名顺序执行完这些 SQL，否则新代码上线后会直接报错。"
-            echo "规则见 \`agent-api/supabase/migrations/README.md\`。"
+            echo "合并到 main 后，部署流水线的 migrate job 会先执行这些 migration，再发布后端。"
+            echo "请确认它们只做向前兼容的加法（见 \`supabase/README.md\`），且已在非生产项目跑过 RLS 验收。"
           } >> "$GITHUB_STEP_SUMMARY"
-          # 只提醒，不阻断：migration 必须先于代码上线，卡住 PR 反而会诱导绕过。
-          echo "::warning::本次包含新增 migration，请确认已在 Supabase SQL Editor 执行"
+          echo "::warning::本次包含新增 migration，合并后会自动执行到生产库"

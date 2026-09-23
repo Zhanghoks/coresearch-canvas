@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 
-import { supabaseTestEnv } from "./testing/store-harness.js";
+import { signedInClient, supabaseTestEnv } from "./testing/store-harness.js";
 
 // 只跑在本地/CI 的 supabase start 上；supabaseTestEnv 拒绝生产 ref。
 const env = supabaseTestEnv();
@@ -77,9 +77,9 @@ test("Supabase RLS isolates users and projects", { skip: !env }, async () => {
         assert.ok(revisionRewriteError, "revision 正文不能原地改写，修订必须追加新 revision");
 
         // Canvas projection：跨 Project 与跨用户都拿不到行。
-        const { error: projectionError } = await aliceDb.rpc("save_canvas_projection", {
+        const { error: projectionError } = await aliceDb.rpc("commit_canvas_projection", {
             target_project_id: projectA.id,
-            target_revision: 1,
+            base_revision: 0,
             next_nodes: [{ clientNodeId: "seed-1-a", type: "seed", entityId: seed.id, x: 1, y: 2, width: 280, height: 420, displayState: {} }],
             next_edges: [],
             next_viewport: { x: 0, y: 0, k: 1, showImageInfo: false },
@@ -91,9 +91,9 @@ test("Supabase RLS isolates users and projects", { skip: !env }, async () => {
         const { data: bobNodes, error: bobNodeError } = await bobDb.from("canvas_nodes").select("id").eq("project_id", projectA.id);
         assert.ifError(bobNodeError);
         assert.deepEqual(bobNodes, []);
-        const { data: bobProjection, error: bobProjectionError } = await bobDb.rpc("save_canvas_projection", {
+        const { data: bobProjection, error: bobProjectionError } = await bobDb.rpc("commit_canvas_projection", {
             target_project_id: projectA.id,
-            target_revision: 99,
+            base_revision: 1,
             next_nodes: [],
             next_edges: [],
             next_viewport: null,
@@ -116,17 +116,6 @@ async function createUser(admin: SupabaseClient, email: string, password: string
     assert.ifError(error);
     assert.ok(data.user);
     return data.user;
-}
-
-async function signedInClient(url: string, key: string, email: string, password: string) {
-    const auth = client(url, key);
-    const { data, error } = await auth.auth.signInWithPassword({ email, password });
-    assert.ifError(error);
-    assert.ok(data.session?.access_token);
-    return createClient(url, key, {
-        accessToken: async () => data.session!.access_token,
-        auth: { persistSession: false, autoRefreshToken: false },
-    });
 }
 
 async function createProject(database: SupabaseClient, name: string) {

@@ -67,6 +67,8 @@ export async function signedInClient(url: string, key: string, email: string, pa
     const { data, error } = await auth.auth.signInWithPassword({ email, password });
     assert.ifError(error);
     const token = data.session!.access_token;
+    // 本地栈里 GoTrue 签发的 iat 偶尔比 PostgREST 的时钟快不到一秒，立刻使用会被拒（PGRST303 JWT issued at future）。
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     return createClient(url, key, { accessToken: async () => token, auth: { persistSession: false, autoRefreshToken: false } });
 }
 

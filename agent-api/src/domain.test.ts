@@ -213,7 +213,7 @@ test("Research Entity 和研究关系不能跨 Project 读取", async () => {
     await assert.rejects(() => research.readEntity(ctxB, seed.id), (error) => error instanceof AppError && error.code === "entity_not_found");
 });
 
-test("画布投影按 revision 单调推进，断边被丢弃，插件节点类型原样保留", async () => {
+test("画布投影按 baseRevision 乐观锁保存，断边被丢弃，插件节点类型原样保留", async () => {
     const store = new InMemoryResearchStore();
     const research = new ResearchModule(store);
     const project = await store.createProject("alice", "A");
@@ -232,7 +232,7 @@ test("画布投影按 revision 单调推进，断边被丢弃，插件节点类�
         ],
         viewport: { x: 5, y: 6, k: 2, showImageInfo: true },
     };
-    assert.equal((await research.saveProjection(ctx, 1, body)).revision, 1);
+    assert.equal((await research.saveProjection(ctx, 0, body)).revision, 1);
 
     const projection = await research.readProjection(ctx);
     assert.equal(projection.nodes.length, 2);
@@ -241,7 +241,8 @@ test("画布投影按 revision 单调推进，断边被丢弃，插件节点类�
     assert.equal(projection.viewport?.k, 2);
     assert.equal(projection.entities.length, 1);
 
-    // 过期 revision 不写入，调用方据返回值判断冲突。
-    assert.equal((await research.saveProjection(ctx, 1, { ...body, nodes: [] })).revision, 1);
+    // 基于过期 revision 的保存被拒绝，并带回当前 revision；不写入任何东西。
+    await assert.rejects(() => research.saveProjection(ctx, 0, { ...body, nodes: [] }), (error) =>
+        error instanceof AppError && error.code === "canvas_revision_conflict" && error.details?.currentRevision === 1);
     assert.equal((await research.readProjection(ctx)).nodes.length, 2);
 });

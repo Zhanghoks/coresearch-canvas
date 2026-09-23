@@ -76,8 +76,8 @@ export class ResearchModule {
         return this.store.readCanvasProjection(ctx);
     }
 
-    async saveProjection(ctx: RequestContext, revision: number, body: JsonObject) {
-        return await this.store.saveCanvasProjection(ctx, revision, projectionInput(body));
+    async saveProjection(ctx: RequestContext, baseRevision: number, body: JsonObject) {
+        return await this.store.saveCanvasProjection(ctx, baseRevision, projectionInput(body));
     }
 }
 

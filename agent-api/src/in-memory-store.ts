@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { AppError } from "./errors.js";
+import { AppError, canvasRevisionConflict } from "./errors.js";
 import { assertNotSelfRelation } from "./research-rules.js";
 import type { ResearchStore } from "./store.js";
 import { PI_SESSION_STORAGE_VERSION, type AgentRun, type AgentRunStatus, type CanvasProjectionInput, type CanvasWorkspace, type Conversation, type ConversationSession, type JsonObject, type NewRuntimeEvent, type Project, type ProjectSkill, type RequestContext, type ResearchEntity, type ResearchEntityRevision, type ResearchEntityType, type ResearchRelation, type ResearchRevisionInput, type RuntimeEvent } from "./types.js";
@@ -59,10 +59,11 @@ export class InMemoryResearchStore implements ResearchStore {
         return { ...canvas, snapshot: canvas.snapshot ? structuredClone(canvas.snapshot) : null };
     }
 
-    async saveCanvasState(ctx: RequestContext, revision: number, snapshot: JsonObject) {
+    async saveCanvasState(ctx: RequestContext, baseRevision: number, snapshot: JsonObject) {
         const project = this.contextProject(ctx);
-        if (revision > project.canvas.revision) project.canvas = { ...project.canvas, revision, snapshot: structuredClone(snapshot), updatedAt: new Date().toISOString() };
-        return { ...project.canvas, snapshot: project.canvas.snapshot ? structuredClone(project.canvas.snapshot) : null };
+        if (project.canvas.revision !== baseRevision) throw canvasRevisionConflict(project.canvas.revision);
+        project.canvas = { ...project.canvas, revision: baseRevision + 1, snapshot: structuredClone(snapshot), updatedAt: new Date().toISOString() };
+        return { ...project.canvas, snapshot: structuredClone(snapshot) };
     }
 
     async readCanvasProjection(ctx: RequestContext) {
@@ -77,15 +78,20 @@ export class InMemoryResearchStore implements ResearchStore {
         };
     }
 
-    async saveCanvasProjection(ctx: RequestContext, revision: number, projection: CanvasProjectionInput) {
+    async saveCanvasProjection(ctx: RequestContext, baseRevision: number, projection: CanvasProjectionInput) {
         const project = this.contextProject(ctx);
-        if (revision > project.canvas.revision) {
-            const nodeIds = new Set(projection.nodes.map((node) => node.clientNodeId));
-            // 指向不存在节点的边直接丢弃，与 save_canvas_projection 的 join 语义一致。
-            const edges = projection.edges.filter((edge) => nodeIds.has(edge.sourceClientNodeId) && nodeIds.has(edge.targetClientNodeId));
-            this.projections.set(ctx.canvasWorkspaceId, structuredClone({ ...projection, edges }));
-            project.canvas = { ...project.canvas, revision, updatedAt: new Date().toISOString() };
+        if (project.canvas.revision !== baseRevision) throw canvasRevisionConflict(project.canvas.revision);
+        const nodeIds = new Set(projection.nodes.map((node) => node.clientNodeId));
+        if (nodeIds.size !== projection.nodes.length || new Set(projection.edges.map((edge) => edge.clientEdgeId)).size !== projection.edges.length) {
+            throw new AppError("画布投影里有重复的节点或连线 ID", 400, "invalid_projection");
         }
+        if (projection.nodes.some((node) => node.entityId && this.entities.get(node.entityId)?.projectId !== ctx.projectId)) {
+            throw new AppError("画布节点引用了不属于本项目的研究对象", 400, "invalid_projection");
+        }
+        // 指向不存在节点的边直接丢弃，与 commit_canvas_projection 的 join 语义一致。
+        const edges = projection.edges.filter((edge) => nodeIds.has(edge.sourceClientNodeId) && nodeIds.has(edge.targetClientNodeId));
+        this.projections.set(ctx.canvasWorkspaceId, structuredClone({ ...projection, edges }));
+        project.canvas = { ...project.canvas, revision: baseRevision + 1, updatedAt: new Date().toISOString() };
         return { ...project.canvas, snapshot: project.canvas.snapshot ? structuredClone(project.canvas.snapshot) : null };
     }
 

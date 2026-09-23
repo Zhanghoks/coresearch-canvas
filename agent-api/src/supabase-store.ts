@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { AppError } from "./errors.js";
+import { AppError, canvasRevisionConflict } from "./errors.js";
 import { assertNotSelfRelation } from "./research-rules.js";
 import type { ResearchStore } from "./store.js";
 import { PI_SESSION_STORAGE_VERSION, type AgentRunStatus, type CanvasEdgeProjection, type CanvasNodeProjection, type CanvasProjection, type CanvasProjectionInput, type CanvasViewportProjection, type ConversationSession, type JsonObject, type NewRuntimeEvent, type RequestContext, type ResearchEntityType, type ResearchRevisionInput, type ResearchRevisionStatus } from "./types.js";
@@ -45,8 +45,8 @@ export class SupabaseResearchStore implements ResearchStore {
         return canvas(row(data));
     }
 
-    async saveCanvasState(ctx: RequestContext, revision: number, snapshot: JsonObject) {
-        const data = await this.rpc("save_canvas_state", { target_project_id: ctx.projectId, target_revision: revision, next_snapshot: snapshot });
+    async saveCanvasState(ctx: RequestContext, baseRevision: number, snapshot: JsonObject) {
+        const data = await this.rpc("commit_canvas_state", { target_project_id: ctx.projectId, base_revision: baseRevision, next_snapshot: snapshot });
         const value = first(data);
         if (!value) throw new AppError("找不到画布工作区", 404, "canvas_not_found");
         return canvas(row(value));
@@ -71,10 +71,10 @@ export class SupabaseResearchStore implements ResearchStore {
         };
     }
 
-    async saveCanvasProjection(ctx: RequestContext, revision: number, projection: CanvasProjectionInput) {
-        const data = await this.rpc("save_canvas_projection", {
+    async saveCanvasProjection(ctx: RequestContext, baseRevision: number, projection: CanvasProjectionInput) {
+        const data = await this.rpc("commit_canvas_projection", {
             target_project_id: ctx.projectId,
-            target_revision: revision,
+            base_revision: baseRevision,
             next_nodes: projection.nodes.map(nodePayload),
             next_edges: projection.edges.map(edgePayload),
             next_viewport: projection.viewport ? viewportPayload(projection.viewport) : null,
@@ -325,7 +325,11 @@ export class SupabaseResearchStore implements ResearchStore {
     }
 }
 
-function databaseError(error: { code?: string; message: string }) {
+function databaseError(error: { code?: string; message: string; details?: string | null }) {
+    if (error.code === "P0409" && error.message === "canvas_revision_conflict") return canvasRevisionConflict(Number(error.details));
+    if (error.code === "22023" && ["invalid_projection", "duplicate_projection_id", "projection_entity_not_in_project", "invalid_canvas_snapshot"].includes(error.message)) {
+        return new AppError("画布数据无效", 400, error.message === "invalid_canvas_snapshot" ? "invalid_canvas_snapshot" : "invalid_projection");
+    }
     if (error.code === "23505") return new AppError("当前对话已有任务正在运行", 409, "conversation_busy");
     if (error.code === "P0409") return new AppError(error.message === "conversation_not_active" ? "对话已归档" : "当前对话仍在运行", 409, error.message === "conversation_not_active" ? "conversation_archived" : "conversation_busy");
     if (error.code === "42501") return new AppError("无权访问该资源", 403, "forbidden");

@@ -34,6 +34,33 @@ for (const harness of harnesses) {
             assert.equal(canvas.snapshot, null);
         });
 
+        test("画布快照按 baseRevision 乐观锁保存，revision 由服务端分配", async () => {
+            const { user, ctx } = await projectContext(harness);
+            const first = await user.store.saveCanvasState(ctx, 0, { nodes: ["a"] });
+            assert.equal(first.revision, 1);
+            const second = await user.store.saveCanvasState(ctx, 1, { nodes: ["a", "b"] });
+            assert.equal(second.revision, 2);
+            // 基于旧版本的写入（乱序到达或另一个标签页）被拒绝，并带回当前 revision；不写入。
+            await rejectsWith(() => user.store.saveCanvasState(ctx, 1, { nodes: ["stale"] }), 409, "canvas_revision_conflict", { currentRevision: 2 });
+            const canvas = await user.store.readCanvas(ctx);
+            assert.equal(canvas.revision, 2);
+            assert.deepEqual(canvas.snapshot, { nodes: ["a", "b"] });
+        });
+
+        test("画布投影与快照共用 revision，拒绝重复节点 ID 和跨项目实体", async () => {
+            const alice = await projectContext(harness);
+            const other = await projectContext(harness);
+            const seed = await alice.user.store.createEntity(alice.ctx, "seed", revision("S"));
+            const foreign = await other.user.store.createEntity(other.ctx, "seed", revision("F"));
+            const node = (clientNodeId: string, entityId?: string) => ({ clientNodeId, type: "seed", entityId: entityId ?? null, x: 0, y: 0, width: 1, height: 1, groupClientId: null, displayState: {} });
+            const saved = await alice.user.store.saveCanvasProjection(alice.ctx, 0, { nodes: [node("n1", seed.id)], edges: [], viewport: null });
+            assert.equal(saved.revision, 1);
+            await rejectsWith(() => alice.user.store.saveCanvasState(alice.ctx, 0, {}), 409, "canvas_revision_conflict", { currentRevision: 1 });
+            await rejectsWith(() => alice.user.store.saveCanvasProjection(alice.ctx, 1, { nodes: [node("dup"), node("dup")], edges: [], viewport: null }), 400, "invalid_projection");
+            await rejectsWith(() => alice.user.store.saveCanvasProjection(alice.ctx, 1, { nodes: [node("x", foreign.id)], edges: [], viewport: null }), 400, "invalid_projection");
+            assert.equal((await alice.user.store.readCanvas(alice.ctx)).revision, 1);
+        });
+
         test("Skill 首次保存插入、再次保存更新同一条", async () => {
             const { user, ctx } = await projectContext(harness);
             const created = await user.store.saveSkill(ctx, { name: "lab", definition: "v1", enabled: true });
@@ -126,11 +153,12 @@ function revision(title: string): ResearchRevisionInput {
     return { title, summary: "", document: "", attributes: {}, status: "draft" };
 }
 
-async function rejectsWith(fn: () => Promise<unknown>, status: number, code: string) {
+async function rejectsWith(fn: () => Promise<unknown>, status: number, code: string, details?: Record<string, unknown>) {
     await assert.rejects(fn, (error) => {
         assert.ok(error instanceof AppError, `期望 AppError，实际 ${error instanceof Error ? error.message : String(error)}`);
         assert.equal(error.code, code);
         assert.equal(error.statusCode, status);
+        if (details) assert.deepEqual(error.details, details);
         return true;
     });
 }

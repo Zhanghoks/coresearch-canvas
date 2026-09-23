@@ -15,7 +15,7 @@ import type { RuntimeAdapter } from "./runtime.js";
 import { RuntimeManager } from "./runtime-manager.js";
 import { RuntimeTokenService } from "./runtime-token.js";
 import { SupabaseResearchStore } from "./supabase-store.js";
-import { AGENT_PROTOCOL_VERSION, type JsonObject, type RuntimeEvent } from "./types.js";
+import { AGENT_PROTOCOL_VERSION, type CanvasWorkspace, type JsonObject, type RuntimeEvent } from "./types.js";
 
 export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adapter?: RuntimeAdapter } = {}) {
     const startedAt = new Date().toISOString();
@@ -104,10 +104,8 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
     app.put("/v1/projects/:projectId/canvas/projection", asyncRoute(async (request, response) => {
         const scope = requestScope(response);
         const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
-        const revision = nonNegativeInteger(request.body?.revision, "画布 revision 无效");
-        const workspace = await scope.research.saveProjection(ctx, revision, jsonObject(request.body, "画布投影无效"));
-        if (workspace.revision !== revision) throw new AppError("画布投影 revision 已过期", 409, "canvas_revision_conflict");
-        response.json(workspace);
+        const baseRevision = nonNegativeInteger(request.body?.baseRevision, "画布 baseRevision 无效");
+        response.json(await scope.research.saveProjection(ctx, baseRevision, jsonObject(request.body, "画布投影无效")));
     }));
 
     app.get("/v1/projects/:projectId/entities", asyncRoute(async (request, response) => {
@@ -252,7 +250,7 @@ export function createApp(config: AppConfig, deps: { canvas?: CanvasBridge; adap
 
     app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
         const status = error instanceof AppError ? error.statusCode : 500;
-        response.status(status).json({ error: { code: error instanceof AppError ? error.code : "internal_error", message: error instanceof AppError ? error.message : "Agent API 内部错误" } });
+        response.status(status).json({ error: { code: error instanceof AppError ? error.code : "internal_error", message: error instanceof AppError ? error.message : "Agent API 内部错误", ...(error instanceof AppError && error.details ? { details: error.details } : {}) } });
     });
     return app;
 }
@@ -278,11 +276,10 @@ function publishCanvas(canvas: CanvasBridge) {
         const scope = requestScope(response);
         const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         const clientId = requiredText(request.body?.clientId, "缺少画布客户端 ID");
-        const revision = nonNegativeInteger(request.body?.revision, "画布 revision 无效");
+        const baseRevision = nonNegativeInteger(request.body?.baseRevision, "画布 baseRevision 无效");
         const snapshot = jsonObject(request.body?.snapshot, "画布快照无效");
-        const workspace = await scope.store.saveCanvasState(ctx, revision, snapshot);
-        if (workspace.revision !== revision) throw new AppError("画布快照 revision 已过期", 409, "canvas_revision_conflict");
-        canvas.publishSnapshot(ctx, clientId, revision, snapshot);
+        const workspace = await scope.store.saveCanvasState(ctx, baseRevision, snapshot);
+        canvas.publishSnapshot(ctx, clientId, workspace.revision, snapshot);
         response.json(workspace);
     });
 }
@@ -292,16 +289,18 @@ function completeCanvasTool(canvas: CanvasBridge) {
         const scope = requestScope(response);
         const ctx = await scope.projects.context(scope.auth.userId, routeParam(request, "projectId"));
         const result = jsonObject(request.body?.result, "工具结果无效");
-        if (request.body?.snapshot !== undefined || request.body?.revision !== undefined) {
+        let workspace: CanvasWorkspace | null = null;
+        if (request.body?.snapshot !== undefined || request.body?.baseRevision !== undefined) {
             const clientId = requiredText(request.body?.clientId, "缺少画布客户端 ID");
-            const revision = nonNegativeInteger(request.body?.revision, "画布 revision 无效");
+            const baseRevision = nonNegativeInteger(request.body?.baseRevision, "画布 baseRevision 无效");
             const snapshot = jsonObject(request.body?.snapshot, "画布快照无效");
-            const workspace = await scope.store.saveCanvasState(ctx, revision, snapshot);
-            if (workspace.revision !== revision) throw new AppError("画布快照 revision 已过期", 409, "canvas_revision_conflict");
-            canvas.publishSnapshot(ctx, clientId, revision, snapshot);
+            workspace = await scope.store.saveCanvasState(ctx, baseRevision, snapshot);
+            canvas.publishSnapshot(ctx, clientId, workspace.revision, snapshot);
         }
         canvas.completeMutation(ctx, requiredText(routeParam(request, "requestId"), "缺少工具调用 ID"), result);
-        response.status(204).end();
+        // 带了快照就把服务端分配的新 revision 回给浏览器，它据此继续后续发布。
+        if (workspace) response.json(workspace);
+        else response.status(204).end();
     });
 }
 

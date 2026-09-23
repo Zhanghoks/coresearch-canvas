@@ -53,8 +53,8 @@ test("Conversation 绑定 Codex thread，画布 snapshot 随 revision 持久化�
     assert.equal((await store.readConversation(ctxA, conversation.id)).codexThreadId, "thr_1");
     await assert.rejects(() => store.bindCodexThread(ctxB, conversation.id, "thr_x"), (error) => error instanceof AppError && error.code === "conversation_not_found");
 
-    const saved = await store.saveCanvasState(ctxA, 2, { nodes: [{ id: "seed" }] });
-    assert.equal(saved.revision, 2);
+    const saved = await store.saveCanvasState(ctxA, 0, { nodes: [{ id: "seed" }] });
+    assert.equal(saved.revision, 1);
     assert.equal((saved.snapshot as { nodes: Array<{ id: string }> }).nodes[0]?.id, "seed");
     assert.equal((await store.readCanvas(ctxB)).snapshot, null);
 });

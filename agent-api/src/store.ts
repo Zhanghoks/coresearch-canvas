@@ -6,10 +6,11 @@ export interface ResearchStore {
     readProject(userId: string, projectId: string): Promise<Project>;
     deleteProject(userId: string, projectId: string): Promise<void>;
     readCanvas(ctx: RequestContext): Promise<CanvasWorkspace>;
-    saveCanvasState(ctx: RequestContext, revision: number, snapshot: JsonObject): Promise<CanvasWorkspace>;
+    /** 乐观锁：baseRevision 等于当前 revision 才写入，服务端分配新 revision（+1）；否则抛 canvas_revision_conflict。 */
+    saveCanvasState(ctx: RequestContext, baseRevision: number, snapshot: JsonObject): Promise<CanvasWorkspace>;
 
     readCanvasProjection(ctx: RequestContext): Promise<CanvasProjection>;
-    saveCanvasProjection(ctx: RequestContext, revision: number, projection: CanvasProjectionInput): Promise<CanvasWorkspace>;
+    saveCanvasProjection(ctx: RequestContext, baseRevision: number, projection: CanvasProjectionInput): Promise<CanvasWorkspace>;
 
     listEntities(ctx: RequestContext): Promise<ResearchEntityDetail[]>;
     readEntity(ctx: RequestContext, entityId: string): Promise<ResearchEntityDetail>;

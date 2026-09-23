@@ -16,7 +16,7 @@ INTERVAL="${UPDATE_INTERVAL:-60}"
 self_mtime="$(stat -c %Y "$self")"
 
 resolve_main() {
-    oras manifest fetch --no-tty "$BUNDLE_REPO:main" 2>/dev/null |
+    oras manifest fetch "$BUNDLE_REPO:main" 2>/dev/null |
         node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).annotations["org.opencontainers.image.revision"]||"")}catch{}})'
 }
 

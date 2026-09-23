@@ -188,5 +188,6 @@ grant execute on function public.commit_canvas_state(uuid, bigint, jsonb) to aut
 revoke execute on function public.commit_canvas_projection(uuid, bigint, jsonb, jsonb, jsonb) from public, anon;
 grant execute on function public.commit_canvas_projection(uuid, bigint, jsonb, jsonb, jsonb) to authenticated;
 
-drop function if exists public.save_canvas_state(uuid, bigint, jsonb);
-drop function if exists public.save_canvas_projection(uuid, bigint, jsonb, jsonb, jsonb);
+-- 旧的 save_canvas_state / save_canvas_projection 暂不删除：migration 先于后端切换执行，
+-- 服务器还在跑旧版本的这段时间里旧函数必须可用（见 supabase/README.md「只允许向前兼容的加法」）。
+-- 新后端上线并稳定后，在下一次发布里单独删除。

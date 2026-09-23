@@ -44,7 +44,6 @@ export class CanvasBridge {
             const timer = setTimeout(() => {
                 if (this.pending.delete(callId)) resolve({ approved: false, error: "confirmation_timeout" });
             }, this.confirmationTimeoutMs);
-            timer.unref?.();
             this.pending.set(callId, { ctx, resolve: (value) => { clearTimeout(timer); resolve(value); }, reject });
             signal.addEventListener("abort", () => {
                 clearTimeout(timer);

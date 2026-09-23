@@ -1,19 +1,25 @@
 name: Deploy production
 
-# main 更新 → CI → 构建镜像推 GHCR → SSH 触发服务器 deploy.sh → 验证 /health。
-# 复杂逻辑都在 deploy/production/deploy.sh 里，这个 workflow 只负责触发和验证。
+# main 更新 → CI → 数据库 migration → 构建 agent-api 运行包推 GHCR（sha-<commit> + main）
+# → 服务器上的 updater 自己拉取并切换 → 这里轮询公网 /health，断言 version 是本次 commit。
+#
+# 生产机（ebcloud 容器实例）的入站 SSH 走中转、经常断线，所以 CI 不 SSH 进服务器，
+# 只负责把 :main 指向新版本。服务器侧逻辑见 deploy/huabei/。
 
 on:
   push:
     branches: [main]
     paths:
       - "agent-api/**"
-      - "deploy/production/**"
+      - "supabase/**"
+      - "deploy/huabei/**"
+      - "VERSION"
       - ".github/workflows/deploy-production.yml"
+      - ".github/workflows/agent-api-ci.yml"
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "要部署的镜像 tag（留空则构建当前 commit）。回滚时填 sha-<旧commit>"
+      rollback_tag:
+        description: "回滚：填已发布过的 sha-<commit>，会把 :main 指回它。留空则正常构建当前 commit"
         required: false
         type: string
 
@@ -21,146 +27,156 @@ permissions:
   contents: read
   packages: write
 
-# 串行化：push A / B / C 连续到来时，不会有多个进程同时操作同一台服务器。
-# cancel-in-progress 必须是 false —— 取消一个部署到一半的 job 会留下不确定的服务器状态。
+# 串行化：连续 push 时不会有两个发布同时改 :main 或同时跑 migration。
+# cancel-in-progress 必须是 false —— 中途取消 migration 会留下不确定的数据库状态。
 concurrency:
   group: coresearch-production
   cancel-in-progress: false
 
 env:
-  IMAGE_NAME: ghcr.io/zhanghoks/coresearch-agent-api
+  BUNDLE_REPO: ghcr.io/zhanghoks/coresearch-agent-api-bundle
+  ORAS_VERSION: 1.3.4
 
 jobs:
   ci:
+    if: inputs.rollback_tag == ''
     uses: ./.github/workflows/agent-api-ci.yml
 
-  image:
-    name: 构建并推送镜像
+  migrate:
+    name: 数据库 migration
     needs: ci
     runs-on: ubuntu-latest
-    # 手动指定 image_tag（回滚）时跳过构建，直接用已有镜像。
-    if: github.event.inputs.image_tag == ''
-    outputs:
-      tag: ${{ steps.tag.outputs.value }}
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - id: tag
-        run: echo "value=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: 检查是否已接入
+        id: gate
+        run: |
+          if [ "${{ vars.SUPABASE_MIGRATIONS_ENABLED }}" != "true" ]; then
+            echo "::warning::SUPABASE_MIGRATIONS_ENABLED 不是 true，本次不执行 migration。完成 supabase/README.md 的一次性基线后再开启。"
+            echo "migration：**未接入 CI，已跳过**（见 supabase/README.md）" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: 读取 VERSION
-        id: version
-        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: supabase/setup-cli@v1
+        if: steps.gate.outputs.enabled == 'true'
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          version: 2.117.0
 
-      - uses: docker/build-push-action@v6
+      - name: supabase db push
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "$SUPABASE_DB_URL" ] || { echo "::error::Environment production 缺少 Secret SUPABASE_DB_URL"; exit 1; }
+          {
+            echo "### 待执行 migration"
+            echo '```'
+            supabase db push --dry-run --db-url "$SUPABASE_DB_URL" 2>&1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          supabase db push --db-url "$SUPABASE_DB_URL"
+
+  bundle:
+    name: 构建并发布运行包
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      rev: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          context: agent-api
-          # 生产机是单机单架构，这里只构建它需要的那一个，比 tag 发布用的 multi-arch 流水线快得多。
-          platforms: ${{ vars.DEPLOY_PLATFORM || 'linux/amd64' }}
-          push: true
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-            APP_VERSION=${{ steps.version.outputs.value }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.value }}
-            ${{ env.IMAGE_NAME }}:main
-          cache-from: type=gha,scope=agent-api-deploy
-          cache-to: type=gha,mode=max,scope=agent-api-deploy
+          node-version: "22.19"
+          cache: npm
+          cache-dependency-path: agent-api/package-lock.json
 
-  deploy:
-    name: 部署到服务器
-    needs: [ci, image]
-    # image job 在回滚场景会被 skip，此时仍要继续。
-    if: always() && needs.ci.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped')
+      - name: 构建 bundle
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: deploy/huabei/build-bundle.sh "$RUNNER_TEMP/agent-api.tar.gz"
+
+      - uses: oras-project/setup-oras@v1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+
+      - name: 推送到 GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          cd "$RUNNER_TEMP"
+          oras push "$BUNDLE_REPO:sha-$GITHUB_SHA" \
+            --artifact-type application/vnd.coresearch.agent-api.bundle \
+            --annotation "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            agent-api.tar.gz:application/gzip
+          # :main 是服务器 updater 跟随的指针，最后再移动它。
+          oras tag "$BUNDLE_REPO:sha-$GITHUB_SHA" main
+          echo "发布 \`$BUNDLE_REPO:sha-$GITHUB_SHA\`，:main 已指向它" >> "$GITHUB_STEP_SUMMARY"
+
+  rollback:
+    name: 回滚 :main
+    if: inputs.rollback_tag != ''
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      rev: ${{ steps.retag.outputs.rev }}
+    steps:
+      - uses: oras-project/setup-oras@v1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+
+      - id: retag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.rollback_tag }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in sha-*) ;; *) echo "::error::rollback_tag 必须是 sha-<commit>"; exit 1 ;; esac
+          echo "$GH_TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          oras manifest fetch "$BUNDLE_REPO:$TAG" >/dev/null || { echo "::error::$BUNDLE_REPO:$TAG 不存在"; exit 1; }
+          oras tag "$BUNDLE_REPO:$TAG" main
+          echo "rev=${TAG#sha-}" >> "$GITHUB_OUTPUT"
+          echo "回滚：:main → \`$TAG\`（数据库不回滚）" >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: 公网 health 校验
+    needs: [bundle, rollback]
+    if: always() && (needs.bundle.result == 'success' || needs.rollback.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - id: tag
-        run: |
-          tag="${{ github.event.inputs.image_tag }}"
-          [ -n "$tag" ] || tag="${{ needs.image.outputs.tag }}"
-          [ -n "$tag" ] || { echo "无法确定镜像 tag"; exit 1; }
-          echo "value=$tag" >> "$GITHUB_OUTPUT"
-          echo "将部署镜像 tag: $tag" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 准备 SSH
-        env:
-          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -p "${SERVER_SSH_PORT:-22}" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
-          # keyscan 静默失败时 known_hosts 拿不到目标主机指纹，后面的 scp/ssh 会报一个
-          # 不相关的连接错误，排查时容易被引导去查 SSH key 而不是这里。提前在这一步就 fail。
-          grep -q "$SERVER_HOST" ~/.ssh/known_hosts || { echo "::error::ssh-keyscan 没有拿到 $SERVER_HOST 的指纹，检查 SERVER_HOST/SERVER_SSH_PORT 是否正确、服务器 SSH 是否可达"; exit 1; }
-
-      - name: 同步部署文件到服务器
-        env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
-        # compose 文件和 deploy.sh 每次部署都覆盖，服务器上因此不需要源码、不需要 git。
-        run: |
-          set -euo pipefail
-          scp -i ~/.ssh/id_deploy -P "${SERVER_SSH_PORT:-22}" \
-            deploy/production/docker-compose.yml deploy/production/deploy.sh \
-            "$SERVER_USER@$SERVER_HOST:/srv/coresearch/app/"
-          ssh -i ~/.ssh/id_deploy -p "${SERVER_SSH_PORT:-22}" "$SERVER_USER@$SERVER_HOST" \
-            'chmod +x /srv/coresearch/app/deploy.sh'
-
-      - name: 执行 deploy.sh
-        env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
-          IMAGE_TAG: ${{ steps.tag.outputs.value }}
-        run: |
-          set -euo pipefail
-          ssh -i ~/.ssh/id_deploy -p "${SERVER_SSH_PORT:-22}" "$SERVER_USER@$SERVER_HOST" \
-            "IMAGE_TAG='$IMAGE_TAG' /srv/coresearch/app/deploy.sh"
-
-      - name: 公网 health 校验
+      - name: 等待服务器切到新版本
         env:
           API_PUBLIC_URL: ${{ vars.API_PUBLIC_URL }}
-          EXPECTED_SHA: ${{ github.sha }}
-          IMAGE_TAG: ${{ steps.tag.outputs.value }}
-        # deploy.sh 已经在服务器本机验过 /health；这一步额外验证 Cloudflare Tunnel 通路，
-        # 并断言返回的 version 就是本次部署的 commit —— 只看 200 无法证明新代码真的起来了。
-        # 这是唯一能证明"新代码真的对外可用"的断言，缺 API_PUBLIC_URL 时必须直接 fail，
-        # 不能静默跳过——否则部署可能已经在悄悄跑旧镜像，而流水线仍然显示全绿。
+          EXPECTED: ${{ needs.bundle.outputs.rev || needs.rollback.outputs.rev }}
+        # updater 每 60s 检查一次 :main，加上拉取和重启，正常 2–3 分钟内完成。
+        # 只看 200 不能证明新代码起来了，必须断言 version。缺 API_PUBLIC_URL 直接失败，不静默跳过。
         run: |
           set -euo pipefail
           if [ -z "$API_PUBLIC_URL" ]; then
-            echo "::error::未配置 GitHub Variable API_PUBLIC_URL，无法校验公网 health，部署视为失败。在仓库 Settings → Secrets and variables → Actions → Variables 里补上它（见 deploy/ENV.md）"
+            echo "::error::未配置 GitHub Variable API_PUBLIC_URL，无法校验公网 health（见 deploy/ENV.md）"
             exit 1
           fi
-          body="$(curl --fail --silent --show-error --max-time 15 --retry 5 --retry-delay 3 --retry-all-errors "$API_PUBLIC_URL/health")"
-          echo "health: $body"
-          echo "公网 health: \`$body\`" >> "$GITHUB_STEP_SUMMARY"
-          reported="$(printf '%s' "$body" | jq -r '.version')"
-          if [ "${{ github.event.inputs.image_tag }}" != "" ]; then
-            echo "回滚部署（$IMAGE_TAG），跳过 version 一致性断言（返回 $reported）"
-            exit 0
-          fi
-          if [ "$reported" != "$EXPECTED_SHA" ]; then
-            echo "::error::服务器返回的 version=$reported，与本次部署的 $EXPECTED_SHA 不一致，可能拉到了旧镜像"
-            exit 1
-          fi
-          echo "version 断言通过：$reported"
-
-      - name: 清理 SSH key
-        if: always()
-        run: rm -f ~/.ssh/id_deploy
+          deadline=$(( $(date +%s) + 600 ))
+          reported=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            body="$(curl --silent --max-time 10 "$API_PUBLIC_URL/health" || true)"
+            reported="$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || true)"
+            if [ "$reported" = "$EXPECTED" ]; then
+              echo "version 断言通过：$reported"
+              echo "公网 health: \`$body\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "当前 version=${reported:-无响应}，等待 $EXPECTED"
+            sleep 15
+          done
+          echo "::error::10 分钟内公网 /health 没有切到 $EXPECTED（最后一次: ${reported:-无响应}）。服务器上查看: pm2 logs updater / pm2 logs agent-api"
+          exit 1

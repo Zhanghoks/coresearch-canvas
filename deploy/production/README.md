@@ -7,6 +7,12 @@
 > 存在一份 Git 里找不到的代码，就已经出现了第二份源码真相源，早晚会导致线上和本地"面目全非"。
 > 环境变量核对表见 [`deploy/ENV.md`](../ENV.md)。
 
+> **当前生产后端不走本文的 Docker Compose 方案。** 生产机是 ebcloud 容器实例（没有 dockerd/systemd），
+> 用的是 [`deploy/huabei/`](../huabei/README.md)：CI 把运行包推到 GHCR，服务器 updater 自己拉取、pm2 运行，
+> `deploy-production.yml` 已按那套流程改写。本文保留为"普通 Linux 主机"方案：换到能跑 Docker 的机器时，
+> 按这里初始化，并用 `IMAGE_TAG=sha-<commit> deploy.sh` 手动发布（镜像由 `agent-api-docker-image.yml` 在打 tag 时构建）。
+> 下文涉及 `SERVER_*` SSH Secret 和 CI 自动 SSH 部署的段落只适用于该方案。
+
 20 人内测规模，单机 Docker Compose + Vercel + Supabase。
 
 日常流程只有一条：
@@ -143,7 +149,7 @@ sudo vim /etc/cloudflared/config.yml    # 填真实 TUNNEL_ID 和域名
 
 ### 7. 执行数据库 migration
 
-在 Supabase SQL Editor 按文件名顺序执行 `agent-api/supabase/migrations/001` 到 `008`（已执行过的不要重复跑）。规则见该目录下的 `README.md`。
+数据库结构由 CI 的 `migrate` job 通过 `supabase db push` 执行，首次接入需要先做一次性基线，见 `supabase/README.md`。
 
 ### 8. 触发首次部署
 
@@ -338,7 +344,7 @@ agent-worker:
 
 ### 4. Migration 手工执行，必须先于代码上线
 
-流水线不跑 migration。规则见 `agent-api/supabase/migrations/README.md`。
+migration 由流水线的 `migrate` job 在发布后端之前执行，规则见 `supabase/README.md`。
 
 ### 5. web 有 43 个存量类型错误
 

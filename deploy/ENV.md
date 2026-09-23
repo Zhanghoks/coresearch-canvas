@@ -7,8 +7,8 @@
 三类物理隔离的系统，任何一个变量只能属于其中一个，不能合并：
 
 - **Vercel Dashboard**：前端构建期变量，值会被编译进 JS，不能放密钥。
-- **GitHub Actions Secrets / Variables**：只用来让 CI "登得上服务器"，不持有业务密钥。
-- **服务器 `/srv/coresearch/env/production.env`**：唯一的生产密钥存放处，不进 Git、不进镜像。
+- **GitHub Actions Secrets / Variables**：只用来发布运行包、跑数据库 migration、校验公网 health，不持有业务运行密钥。
+- **服务器 `/root/data/zmj/coresearch/secrets/agent-api.env`**：唯一的生产运行密钥存放处，不进 Git、不进运行包。
 
 ## Vercel Dashboard（Project Settings → Environment Variables）
 
@@ -25,19 +25,20 @@
 
 | 名称 | 类型 | 用途 | 缺失/错误时的现象 |
 |---|---|---|---|
-| `SERVER_HOST` | Secret | 部署时 SSH 目标 | `deploy-production.yml` 的 deploy job 直接失败在"准备 SSH"步骤 |
-| `SERVER_USER` | Secret | SSH 登录用户 | 同上 |
-| `SERVER_SSH_KEY` | Secret | 部署专用私钥全文 | 同上，或 Permission denied |
-| `SERVER_SSH_PORT` | Secret（可选） | 非 22 端口时才需要 | 端口非默认且未设置时连接超时 |
-| `API_PUBLIC_URL` | Variable（必填） | 部署后公网 health 校验用 | 未设置会让部署在这一步直接失败（不再静默跳过） |
-| `DEPLOY_PLATFORM` | Variable（可选） | 服务器非 amd64 时改成 `linux/arm64` | 架构不对会导致镜像启动失败 |
+| `SUPABASE_DB_URL` | Secret（Environment `production`） | CI 执行 `supabase db push` 的数据库连接串（Session pooler，密码 percent-encode） | 开启 migration 后 `migrate` job 失败，后端不会发布 |
+| `SUPABASE_MIGRATIONS_ENABLED` | Variable | 设为 `true` 才让 CI 执行 migration；首次必须先做 `supabase/README.md` 的一次性基线 | 不是 `true` 时 `migrate` job 打 warning 并跳过，schema 需要手工维护 |
+| `API_PUBLIC_URL` | Variable（必填） | 发布后轮询公网 `/health`，断言 `version` 是本次 commit | 未设置时 `verify` job 直接失败（不静默跳过） |
 
-这些变量**只负责"CI 怎么登上服务器"**，不持有任何业务密钥（`SUPABASE_SECRET_KEY`、`PI_API_KEY`
-等禁止出现在这里）。
+发布运行包用的是 workflow 自带的 `GITHUB_TOKEN`，不需要额外配置。**不再需要 `SERVER_*` 系列 SSH Secret**：服务器自己从 GHCR 拉取，CI 不登录服务器，可以从仓库设置里删掉它们。
 
-## 服务器 `/srv/coresearch/env/production.env`
+GHCR 上的 `coresearch-agent-api-bundle` 包必须设为 **Public**（Package settings → Change visibility），服务器才能匿名拉取；它只含已开源的代码编译产物，不含任何密钥。
 
-来源：`deploy/production/production.env.example`。`chmod 600`，永远不进 Git。
+`SUPABASE_SECRET_KEY`、`PI_API_KEY` 等运行密钥禁止出现在这里。
+
+## 服务器 `/root/data/zmj/coresearch/secrets/agent-api.env`
+
+来源：`agent-api/.env.production.example`。`chmod 600`，永远不进 Git。布局见 `deploy/huabei/README.md`。
+（标准 Docker 主机方案用的是 `/srv/coresearch/env/production.env`，变量相同，见 `deploy/production/README.md`。）
 
 | 变量名 | 用途 | 缺失/错误时的现象 |
 |---|---|---|
@@ -47,9 +48,9 @@
 | `AGENT_API_ORIGINS` | CORS 白名单，逗号分隔精确 origin | 前端报 CORS 错误；新增 Vercel Preview 域名忘了追加也会报 CORS |
 | `PI_PROVIDER` / `PI_MODEL` | 模型提供方/型号 | agent-api 启动即退出 |
 | `PI_API_KEY` | 模型 Key，只放这里 | 同上；同样禁止出现在 Vercel 或 GitHub Secrets |
-| `PI_AGENT_DIR` | Pi 会话数据目录，固定 `/var/lib/research-canvas/pi` | 写错会导致会话数据丢失或权限报错 |
-| `PORT` | 固定 `4100`，要和 compose/健康检查一致 | 改了但没同步改 compose 会导致 health check 失败 |
-| `ENABLE_BUILTIN_TEST_ACCOUNT` | **生产禁止设置** | 设了之后每次容器启动都会把内置 `test` 账号密码重置回固定弱密码 `12345678`；自动化部署下这会每次部署都发生一次，安全风险 |
+| `PI_AGENT_DIR` | Pi 会话数据目录。huabei 方案由 pm2 强制设为 `coresearch/data/pi`（持久盘），这里写的值会被覆盖 | 若落在容器根文件系统上，实例重建后会话数据全部丢失 |
+| `PORT` | 固定 `4100`，要和 Tunnel ingress、health 地址一致 | 改了但没同步改 Tunnel 配置会导致公网 502、部署 health 断言失败 |
+| `ENABLE_BUILTIN_TEST_ACCOUNT` | **生产禁止设置** | 设了之后每次进程启动都会把内置 `test` 账号密码重置回固定弱密码 `12345678`；自动化部署下这会每次部署都发生一次，安全风险 |
 
 ## 部署来源：这张表核对完之后，还要确认"代码本身是不是最新的"
 

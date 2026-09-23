@@ -7,16 +7,19 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { hostedAgentApi, type HostedConversation, type HostedProjectSkill, type HostedRuntimeEvent } from "@/services/api/hosted-agent";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { AgentChatMessage, type AgentChatMessageItem } from "./agent-chat-message";
+import { presentCanvasReferenceMessage, promptWithCanvasReferences } from "./agent-event-formatters";
 import { hostedBrowserClientId, sanitizeHostedSnapshot, type useHostedAgentProject } from "./use-hosted-agent-project";
 
 type HostedScope = ReturnType<typeof useHostedAgentProject>;
-type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type ChatMessage = AgentChatMessageItem;
 type PendingCanvasTool = { callId: string; summary: string; operations: CanvasAgentOp[] };
 
 export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
     const { message } = App.useApp();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const closePanel = useAgentStore((state) => state.closePanel);
+    const pendingSend = useAgentStore((state) => state.pendingSend);
     const [conversations, setConversations] = useState<HostedConversation[]>([]);
     const [conversationId, setConversationId] = useState("");
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -113,7 +116,11 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
         sequenceRef.current = event.sequence;
         if (event.type === "run.started") {
             const text = typeof event.payload.prompt === "string" ? event.payload.prompt : "";
-            if (text) setMessages((items) => upsert(items, { id: `${event.runId}:user`, role: "user", text }));
+            if (text) {
+                // 引用块只给模型看；气泡里显示用户原话 + 引用标签（与本机面板一致）。
+                const shown = presentCanvasReferenceMessage(text, []);
+                setMessages((items) => upsert(items, { id: `${event.runId}:user`, role: "user", text: shown.text, canvasReferences: shown.references }));
+            }
             setRunId(event.runId);
         } else if (event.type === "assistant.delta") {
             const delta = typeof event.payload.delta === "string" ? event.payload.delta : "";
@@ -121,18 +128,21 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
         } else if (event.type === "assistant.completed") {
             const text = typeof event.payload.text === "string" ? event.payload.text : "";
             setMessages((items) => upsert(items, { id: event.itemId, role: "assistant", text }));
+        } else if (event.type === "tool.started" || event.type === "tool.completed") {
+            const toolName = String(event.payload.toolName || "tool");
+            const status = event.type === "tool.started" ? "running" : event.payload.isError ? "failed" : "completed";
+            setMessages((items) => upsert(items, { id: `tool:${event.itemId}`, role: "tool", title: HOSTED_TOOL_TITLES[toolName] || toolName, text: "", detail: { status } }));
+            if (event.type === "tool.completed") setPendingTool(null);
         } else if (event.type === "canvas.tool.requested") {
             setPendingTool({
                 callId: String(event.payload.callId || event.itemId),
                 summary: String(event.payload.summary || "Agent 请求修改当前画布"),
                 operations: Array.isArray(event.payload.operations) ? event.payload.operations as CanvasAgentOp[] : [],
             });
-        } else if (event.type === "tool.completed") {
-            setPendingTool(null);
         } else if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.aborted") {
             setRunId((current) => current === event.runId ? "" : current);
             setPendingTool(null);
-            if (event.type === "run.failed") message.error(String(event.payload.message || "Agent 运行失败"));
+            if (event.type === "run.failed") setMessages((items) => upsert(items, { id: `${event.runId}:error`, role: "error", title: "Agent 运行失败", text: String(event.payload.message || "") }));
         }
     }
 
@@ -196,8 +206,9 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
         }
     };
 
-    const send = async () => {
-        const text = prompt.trim();
+    const canSend = scope.enabled && snapshotReady && Boolean(conversationId) && conversations.find((item) => item.id === conversationId)?.status !== "archived";
+
+    const send = async (text = prompt.trim()) => {
         if (!text || !scope.token || !projectId || !conversationId || runId) return;
         setPrompt("");
         try {
@@ -208,6 +219,23 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
             message.error(error instanceof Error ? error.message : "发送失败");
         }
     };
+
+    // 画布卡片下方的输入框、快捷动作等通过 useAgentStore 写入 prompt + canvasReferences 并递增 pendingSend
+    // （见 lib/canvas/research-node-agent.ts）。等对话就绪后再取走，取走即清空，面板重新挂载不会重复发送。
+    useEffect(() => {
+        if (!pendingSend || !canSend) return;
+        const store = useAgentStore.getState();
+        const text = store.prompt.trim();
+        if (!text) return;
+        store.setAgentState({ prompt: "", canvasReferences: [] });
+        const request = promptWithCanvasReferences(text, store.canvasReferences, "canvas_read_snapshot");
+        if (runId) {
+            setPrompt(request);
+            message.info("Agent 正在运行，已放入输入框，结束后再发送");
+            return;
+        }
+        void send(request);
+    }, [pendingSend, canSend]);
 
     const completeTool = async (approved: boolean) => {
         if (!pendingTool || !scope.token || !projectId) return;
@@ -270,9 +298,7 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
                         {conversations.map((item) => <option key={item.id} value={item.id}>{item.status === "archived" ? `[已归档] ${item.title}` : item.title}</option>)}
                     </select>
                 ) : null}
-                {messages.map((item) => (
-                    <div key={item.id} className={`max-w-[92%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${item.role === "user" ? "ml-auto bg-black/5 dark:bg-white/10" : "mr-auto"}`}>{item.text}</div>
-                ))}
+                {messages.map((item) => <AgentChatMessage key={item.id} item={item} theme={theme} />)}
                 {streamError ? <div className="text-sm opacity-60">{streamError} <button type="button" className="underline" onClick={() => setStreamAttempt((value) => value + 1)}>按序号重新连接</button></div> : null}
                 {pendingTool ? (
                     <div className="border-l-2 pl-3 text-sm" style={{ borderColor: theme.node.stroke }}>
@@ -288,7 +314,7 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
                         if (!event.shiftKey) { event.preventDefault(); void send(); }
                     }} />
                     <div className="mt-2 flex justify-end">
-                        {runId ? <Button type="text" shape="circle" icon={<Square className="size-3.5" />} onClick={() => void stop()} aria-label="停止" /> : <Button type="primary" shape="circle" icon={<Send className="size-4" />} disabled={!scope.enabled || !snapshotReady || !conversationId || conversations.find((item) => item.id === conversationId)?.status === "archived" || !prompt.trim()} onClick={() => void send()} aria-label="发送" />}
+                        {runId ? <Button type="text" shape="circle" icon={<Square className="size-3.5" />} onClick={() => void stop()} aria-label="停止" /> : <Button type="primary" shape="circle" icon={<Send className="size-4" />} disabled={!canSend || !prompt.trim()} onClick={() => void send()} aria-label="发送" />}
                     </div>
                 </div>
             </div>
@@ -314,6 +340,11 @@ export function HostedAgentPanel({ scope }: { scope: HostedScope }) {
         </div>
     );
 }
+
+const HOSTED_TOOL_TITLES: Record<string, string> = {
+    canvas_read_snapshot: "读取画布",
+    canvas_apply_operations: "修改画布",
+};
 
 function upsert(items: ChatMessage[], next: ChatMessage) {
     const index = items.findIndex((item) => item.id === next.id);

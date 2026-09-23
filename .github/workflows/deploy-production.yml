@@ -102,9 +102,12 @@ jobs:
           GIT_SHA: ${{ github.sha }}
         run: deploy/huabei/build-bundle.sh "$RUNNER_TEMP/agent-api.tar.gz"
 
-      - uses: oras-project/setup-oras@v1
-        with:
-          version: ${{ env.ORAS_VERSION }}
+      # setup-oras action 内置的版本表跟不上发布，直接装官方 release（与 deploy/huabei/install.sh 同一版本）。
+      - name: 安装 oras
+        run: |
+          curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" |
+            sudo tar -xz -C /usr/local/bin oras
+          oras version
 
       - name: 推送到 GHCR
         env:
@@ -130,9 +133,12 @@ jobs:
     outputs:
       rev: ${{ steps.retag.outputs.rev }}
     steps:
-      - uses: oras-project/setup-oras@v1
-        with:
-          version: ${{ env.ORAS_VERSION }}
+      # setup-oras action 内置的版本表跟不上发布，直接装官方 release（与 deploy/huabei/install.sh 同一版本）。
+      - name: 安装 oras
+        run: |
+          curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" |
+            sudo tar -xz -C /usr/local/bin oras
+          oras version
 
       - id: retag
         env:

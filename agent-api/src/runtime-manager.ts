@@ -46,6 +46,16 @@ export class RuntimeManager implements AgentRuntime {
     private async execute(store: ResearchStore, ctx: RequestContext, conversationId: string, runId: string, prompt: string, controller: AbortController) {
         let status: "completed" | "failed" | "aborted" = "completed";
         let payload: Record<string, unknown> = {};
+        // 适配器（Pi 的 session.subscribe）不等待异步监听器，delta 会并发写库；并发写入时 sequence
+        // 按到达数据库的顺序分配，文本被打乱，前端还会丢弃序号倒退的事件。这里按调用顺序串行写入。
+        let emitted: Promise<void> = Promise.resolve();
+        let emitError: unknown;
+        const emit = (event: { type: RuntimeEventType; itemId: string; payload: Record<string, unknown> }) => {
+            emitted = emitted.then(() => emitError === undefined ? this.emit(store, ctx, conversationId, runId, event.type, event.itemId, event.payload) : undefined).catch((error: unknown) => {
+                emitError ??= error;
+            });
+            return emitted;
+        };
         try {
             await this.adapter.execute({
                 ctx,
@@ -54,10 +64,13 @@ export class RuntimeManager implements AgentRuntime {
                 runId,
                 prompt,
                 signal: controller.signal,
-                emit: (event) => this.emit(store, ctx, conversationId, runId, event.type, event.itemId, event.payload),
+                emit,
             });
+            await emitted;
+            if (emitError !== undefined) throw emitError;
             if (controller.signal.aborted) status = "aborted";
         } catch (error) {
+            await emitted;
             status = controller.signal.aborted ? "aborted" : "failed";
             if (status === "failed") {
                 // 原始错误可能带模型提供方细节，只写服务端日志；推给前端的 payload 保持通用。

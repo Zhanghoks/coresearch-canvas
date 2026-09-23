@@ -99,12 +99,17 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
         });
         const onAbort = () => void session.abort();
         input.signal.addEventListener("abort", onAbort, { once: true });
+        // Pi 的消息没有 id；一次运行里工具调用前后是两条独立的 assistant 消息，各自编号。
+        let assistantIndex = 0;
+        const assistantItemId = () => `${input.runId}:assistant:${assistantIndex}`;
         const unsubscribe = session.subscribe(async (event) => {
             if (input.signal.aborted) return;
             if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-                await input.emit({ type: "assistant.delta", itemId: messageId(event.message, input.runId), payload: { delta: event.assistantMessageEvent.delta } });
+                await input.emit({ type: "assistant.delta", itemId: assistantItemId(), payload: { delta: event.assistantMessageEvent.delta } });
             } else if (event.type === "message_end" && event.message.role === "assistant") {
-                await input.emit({ type: "assistant.completed", itemId: messageId(event.message, input.runId), payload: { text: messageText(event.message) } });
+                const itemId = assistantItemId();
+                assistantIndex += 1;
+                await input.emit({ type: "assistant.completed", itemId, payload: { text: messageText(event.message) } });
             } else if (event.type === "tool_execution_start") {
                 await input.emit({ type: "tool.started", itemId: event.toolCallId, payload: { toolName: event.toolName, arguments: jsonValue(event.args) } });
             } else if (event.type === "tool_execution_update") {
@@ -149,11 +154,6 @@ function systemPrompt(skills: Array<{ name: string; definition: string }>) {
 
 function textResult(value: unknown, details: JsonObject) {
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details };
-}
-
-function messageId(message: unknown, runId: string) {
-    if (message && typeof message === "object" && "id" in message && typeof message.id === "string") return message.id;
-    return `${runId}:assistant`;
 }
 
 function messageText(message: unknown) {

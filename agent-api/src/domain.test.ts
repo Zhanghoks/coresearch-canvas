@@ -158,6 +158,31 @@ test("用户 JWT 在运行中途过期时，运行期间的写入仍经 runWrite
     assert.deepEqual(events.map((event) => event.type), ["run.started", "assistant.delta", "run.completed"]);
 });
 
+test("适配器不等待 emit 时，事件仍按调用顺序写入，终态在所有事件之后", async () => {
+    const store = new InMemoryResearchStore();
+    const project = await store.createProject("alice", "A");
+    const ctx = { userId: "alice", projectId: project.id, canvasWorkspaceId: project.canvasWorkspaceId };
+    const conversation = await store.createConversation(ctx, "Stream");
+    // 模拟网络抖动：越早的写入越慢到达数据库。
+    const slowStore = Object.create(store) as InMemoryResearchStore;
+    let pending = 20;
+    slowStore.appendEvent = async (...args) => {
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, pending--)));
+        return store.appendEvent(...args);
+    };
+    const deltas = Array.from({ length: 12 }, (_, index) => `t${index}`);
+    const adapter: RuntimeAdapter = {
+        // 与 Pi 的 session.subscribe 一样：触发 emit 但不等待。
+        execute: async (input) => { for (const delta of deltas) void input.emit({ type: "assistant.delta", itemId: "m1", payload: { delta } }); },
+    };
+    const runtime = new RuntimeManager(adapter, new EventHub(), () => slowStore);
+    await runtime.runTurn(slowStore, ctx, { conversationId: conversation.id, prompt: "hi" });
+    await waitForTerminal(store, ctx, conversation.id);
+
+    const events = await store.listEvents(ctx, conversation.id, 0);
+    assert.deepEqual(events.map((event) => event.type === "assistant.delta" ? event.payload.delta : event.type), ["run.started", ...deltas, "run.completed"]);
+});
+
 async function waitForTerminal(store: InMemoryResearchStore, ctx: { userId: string; projectId: string; canvasWorkspaceId: string }, conversationId: string) {
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {

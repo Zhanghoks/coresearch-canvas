@@ -141,6 +141,8 @@ export type CanvasNodeMetadata = {
     };
     direction?: CanvasDirectionMetadata; // Coverage and hierarchy for taxonomy-driven research directions.
     sourceUrl?: string; // Source link for pdf/web nodes.
+    authors?: string; // Paper authors for pdf/web source nodes.
+    previewOpen?: boolean; // Whether a pdf source node shows the inline PDF preview.
 };
 
 export type CanvasNodeData = {

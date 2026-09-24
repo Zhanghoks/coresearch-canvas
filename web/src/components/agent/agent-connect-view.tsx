@@ -110,7 +110,7 @@ export function AgentConnectView({
                                 </li>
                             ))}
                         </ul>
-                    ) : configuredProviders.length ? null : null}
+                    ) : null}
                 </div>
                 <div className="grid gap-2 border-t pt-4" style={{ borderColor: theme.node.stroke }}>
                     <div className="text-sm font-medium">{t("agent.connect.searchTitle")}</div>

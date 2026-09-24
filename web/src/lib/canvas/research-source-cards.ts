@@ -83,6 +83,18 @@ function optionalText(value: unknown) {
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** 论文落地页换成可直接预览的 PDF 地址；认不出来时返回空串。 */
+export function paperPdfUrl(url: string) {
+    const value = url.trim();
+    const arxiv = value.match(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/([0-9]+\.[0-9]+(?:v\d+)?)/i);
+    if (arxiv) return `https://arxiv.org/pdf/${arxiv[1]}`;
+    const acl = value.match(/^https?:\/\/aclanthology\.org\/(\d{4}\.[a-z0-9-]+\.\d+|[A-Z]\d{2}-\d{4})(?:\.pdf)?\/?(?:[?#].*)?$/i);
+    if (acl) return `https://aclanthology.org/${acl[1]}.pdf`;
+    const openReview = value.match(/^https?:\/\/openreview\.net\/(?:forum|pdf)\?id=([^&#]+)/i);
+    if (openReview) return `https://openreview.net/pdf?id=${openReview[1]}`;
+    return /\.pdf($|[?#])/i.test(value) ? value : "";
+}
+
 export function researchSourceNodeType(card: ResearchSourceCard) {
-    return card.kind === "paper" && /\/pdf\/|\.pdf($|\?)/i.test(card.url) ? "pdf" : "web";
+    return card.kind === "paper" && paperPdfUrl(card.url) ? "pdf" : "web";
 }

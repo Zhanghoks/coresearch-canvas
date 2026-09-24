@@ -10,6 +10,7 @@ import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeTagsButton, CanvasNodeTagChips, CanvasNodeTagsPanel } from "./canvas-node-tags-panel";
+import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { RESEARCH_FLOW_META } from "@/components/canvas/nodes/research-nodes";
 import { CanvasNodeType, RESEARCH_FLOW_NODE_TYPES, type CanvasNodeData, type CanvasNodeImage, type CanvasNodeText, type Position, type ResearchFlowNodeType } from "@/types/canvas";
 import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin";

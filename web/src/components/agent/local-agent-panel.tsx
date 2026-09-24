@@ -22,7 +22,7 @@ import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type Ag
 import { type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool } from "@/lib/agent/agent-site-tools";
 import { usesLocalCanvasAgent } from "@/stores/use-user-store";
-import { acknowledgeCodexHistory, activateAgentClient, AgentApiError, discoverLocalAgent, fetchAgentCredentials, fetchAgentModels, fetchAgentSearchCredentials, fetchAgentJson, interruptCodexTurn, postCodexApproval, postState, postToolResult, syncAgentPermissionMode, type AgentProviderStatus, type AgentSearchApiStatus } from "@/services/api/canvas-agent";
+import { acknowledgeCodexHistory, activateAgentClient, AgentApiError, agentProjectScopeQuery, discoverLocalAgent, fetchAgentCredentials, fetchAgentModels, fetchAgentSearchCredentials, fetchAgentJson, interruptCodexTurn, postCodexApproval, postState, postToolResult, syncAgentPermissionMode, type AgentProviderStatus, type AgentSearchApiStatus } from "@/services/api/canvas-agent";
 import { AgentChatTimeline, AgentTaskProgress, AgentUsageBar } from "./agent-chat";
 import { AgentChatComposer } from "./agent-chat-composer";
 import { AgentConnectView } from "./agent-connect-view";
@@ -393,7 +393,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                 if (isCurrentConnection()) addEventLog(rt("conversationSyncFailed"), error);
             });
         };
-        const source = new EventSource(`${endpoint}/events?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`);
+        const source = new EventSource(`${endpoint}/events?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}${agentProjectScopeQuery()}`);
         source.addEventListener("hello", (event) => {
             if (!isCurrentConnection()) return;
             const hello = parseEventData<AgentHelloEvent>(event);
@@ -679,9 +679,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         void Promise.all([fetchAgentCredentials(endpoint, token), fetchAgentSearchCredentials(endpoint, token)]).then(([credentials, search]) => {
             setProviders(credentials.data || []);
             setSearchApis(search.data || []);
-            setCredentialError("");
-            setSearchError("");
-        }).catch((error) => setCredentialError(error instanceof Error ? error.message : String(error)));
+        }).catch((error) => addEventLog(rt("processingFailed"), error));
     }, [connected, endpoint, token]);
 
     useEffect(() => {

@@ -1,11 +1,13 @@
-import { AlertTriangle, ArrowUp, Compass, FilePenLine, GitBranch, HelpCircle, Lightbulb, Maximize2, MessageSquare, Plus, Scale, Sparkles, Sprout, Wrench, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowUp, Compass, ExternalLink, Eye, FilePenLine, GitBranch, HelpCircle, Lightbulb, Link2, Maximize2, MessageSquare, Plus, Scale, Sparkles, Sprout, Wrench, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { attachResearchNodeToAgent } from "@/lib/canvas/research-node-agent";
 import { getResearchContract } from "@/lib/canvas/research-node-contract";
+import { paperPdfUrl } from "@/lib/canvas/research-source-cards";
 import { isImeComposing, isPlainEnterKey } from "@/lib/keyboard-event";
 import { useAgentStore } from "@/stores/use-agent-store";
+import { usesLocalCanvasAgent } from "@/stores/use-user-store";
 import { CanvasNodeType, type ResearchFlowNodeType } from "@/types/canvas";
 import type { CanvasNodeContext } from "@/types/canvas-plugin";
 import { isDocumentSkeleton } from "@research-headings";
@@ -332,28 +334,75 @@ export function QuestionContent({ ctx }: { ctx: CanvasNodeContext }) {
     );
 }
 
+const SOURCE_PREVIEW_SIZE = { width: 560, height: 720 };
+const SOURCE_CARD_SIZE = { width: 300, height: 200 };
+
+/** 论文 / 网页来源卡：作者、摘要、来源站点；PDF 可在卡片内预览。 */
 export function SourceLinkContent({ ctx }: { ctx: CanvasNodeContext }) {
     const { t } = useTranslation();
-    const sourceUrl = ctx.node.metadata?.sourceUrl || "";
-    const isPdf = ctx.node.type === CanvasNodeType.Pdf;
+    const metadata = ctx.node.metadata || {};
+    const sourceUrl = metadata.sourceUrl || "";
+    const pdfUrl = paperPdfUrl(sourceUrl);
+    const previewOpen = Boolean(metadata.previewOpen && pdfUrl);
+    const [editing, setEditing] = useState(!sourceUrl);
+    const agentUrl = useAgentStore((state) => state.url);
+    const agentToken = useAgentStore((state) => state.token);
+    // 标题显示在节点外侧的标题栏，卡片内只放作者、摘要与操作。
+    const title = ctx.node.title && ctx.node.title !== sourceUrl ? ctx.node.title : "";
+    const host = sourceHost(sourceUrl);
+    // 本机模式经 Agent 下载并缓存 PDF，绕开原站禁止 iframe 嵌入的限制；托管模式直接嵌原链接。
+    const previewSrc = pdfUrl ? (usesLocalCanvasAgent() && agentUrl && agentToken ? `${agentUrl.replace(/\/$/, "")}/sources/pdf?url=${encodeURIComponent(pdfUrl)}&token=${encodeURIComponent(agentToken)}` : pdfUrl) : "";
+    const togglePreview = () => {
+        const open = !previewOpen;
+        ctx.updateMetadata({ previewOpen: open });
+        if (open) ctx.updateNode({ width: Math.max(ctx.node.width, SOURCE_PREVIEW_SIZE.width), height: Math.max(ctx.node.height, SOURCE_PREVIEW_SIZE.height) });
+        else ctx.updateNode(SOURCE_CARD_SIZE);
+    };
+    const stop = (event: { stopPropagation: () => void }) => event.stopPropagation();
+    const buttonStyle = { border: `1px solid ${ctx.theme.node.stroke}`, borderRadius: 8, padding: "3px 8px", fontSize: 11, color: ctx.theme.node.text, background: "transparent", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 } as const;
+
     return (
-        <div data-canvas-no-zoom style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", gap: 8, padding: 14, boxSizing: "border-box", color: ctx.theme.node.text }}>
-            <input
-                value={sourceUrl}
-                placeholder={isPdf ? t("canvas.researchNodes.pdfPlaceholder") : t("canvas.researchNodes.webPlaceholder")}
-                onChange={(e) => ctx.updateMetadata({ sourceUrl: e.target.value })}
-                onMouseDown={(e) => e.stopPropagation()}
-                style={{ border: `1px solid ${ctx.theme.node.stroke}`, borderRadius: 8, background: "transparent", color: ctx.theme.node.text, fontSize: 12, padding: "6px 8px", outline: "none" }}
-            />
+        <div data-canvas-no-zoom style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", gap: 8, padding: 14, boxSizing: "border-box", color: ctx.theme.node.text, minHeight: 0 }}>
+            {metadata.authors ? <div style={{ flexShrink: 0, fontSize: 11, color: ctx.theme.node.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{metadata.authors}</div> : null}
+            {metadata.summary && !previewOpen ? <div style={{ minHeight: 0, fontSize: 12, lineHeight: 1.5, color: ctx.theme.node.muted, display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{metadata.summary}</div> : null}
+            {editing || !sourceUrl ? (
+                <input
+                    autoFocus={Boolean(sourceUrl)}
+                    value={sourceUrl}
+                    placeholder={ctx.node.type === CanvasNodeType.Pdf ? t("canvas.researchNodes.pdfPlaceholder") : t("canvas.researchNodes.webPlaceholder")}
+                    onChange={(e) => ctx.updateMetadata({ sourceUrl: e.target.value })}
+                    onBlur={() => sourceUrl && setEditing(false)}
+                    onKeyDown={(e) => e.key === "Enter" && sourceUrl && setEditing(false)}
+                    onMouseDown={stop}
+                    style={{ border: `1px solid ${ctx.theme.node.stroke}`, borderRadius: 8, background: "transparent", color: ctx.theme.node.text, fontSize: 12, padding: "6px 8px", outline: "none" }}
+                />
+            ) : null}
             {sourceUrl ? (
-                <a href={sourceUrl} target="_blank" rel="noreferrer" onMouseDown={(e) => e.stopPropagation()} style={{ fontSize: 11, color: ctx.theme.toolbar.activeText, wordBreak: "break-all" }}>
-                    {sourceUrl}
-                </a>
+                <div style={{ flexShrink: 0, marginTop: "auto", display: "flex", alignItems: "center", gap: 6 }} onMouseDown={stop} onPointerDown={stop}>
+                    {host ? <span style={{ fontSize: 11, color: ctx.theme.node.placeholder, marginRight: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "45%" }}>{host}</span> : null}
+                    {pdfUrl ? <button type="button" style={buttonStyle} onClick={togglePreview}><Eye className="size-3" />{previewOpen ? t("canvas.researchNodes.sourceHidePreview") : t("canvas.researchNodes.sourcePreview")}</button> : null}
+                    <a href={sourceUrl} target="_blank" rel="noreferrer" style={{ ...buttonStyle, textDecoration: "none" }}><ExternalLink className="size-3" />{t("canvas.researchNodes.sourceOpen")}</a>
+                    {!editing ? <button type="button" style={buttonStyle} onClick={() => setEditing(true)} aria-label={t("canvas.researchNodes.sourceEditLink")} title={t("canvas.researchNodes.sourceEditLink")}><Link2 className="size-3" /></button> : null}
+                </div>
             ) : (
                 <span style={{ fontSize: 11, color: ctx.theme.node.placeholder }}>{t("canvas.researchNodes.sourceEmpty")}</span>
             )}
+            {previewOpen && previewSrc ? (
+                <div style={{ flex: 1, minHeight: 0, borderRadius: 8, overflow: "hidden", border: `1px solid ${ctx.theme.node.stroke}`, background: "#fff", position: "relative" }} onWheel={stop}>
+                    <iframe title={title || sourceUrl} src={previewSrc} style={{ width: "100%", height: "100%", border: 0, pointerEvents: ctx.isSelected ? "auto" : "none" }} />
+                </div>
+            ) : null}
+            {previewOpen && !usesLocalCanvasAgent() ? <span style={{ fontSize: 10, color: ctx.theme.node.placeholder }}>{t("canvas.researchNodes.sourcePreviewUnavailable")}</span> : null}
         </div>
     );
+}
+
+function sourceHost(url: string) {
+    try {
+        return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+        return "";
+    }
 }
 
 export function FrameContent({ ctx }: { ctx: CanvasNodeContext }) {

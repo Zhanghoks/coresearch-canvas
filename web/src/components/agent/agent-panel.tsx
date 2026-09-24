@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
+import { useMatch } from "react-router-dom";
 
 import { LocalAgentPanel } from "./local-agent-panel";
 import { HostedAgentPanel } from "./hosted-agent-panel";
@@ -10,6 +11,8 @@ import { CANVAS_AGENT_PANEL_MOTION_MS, useAgentStore } from "@/stores/use-agent-
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { hostedAgentConfigured } from "@/services/api/supabase";
+import { currentAgentProjectId, setAgentProjectScope } from "@/services/api/canvas-agent";
+import { canvasWorkspaceUserId } from "@/lib/canvas/workspace-user";
 
 const PANEL_MOTION_SECONDS = CANVAS_AGENT_PANEL_MOTION_MS / 1000;
 const AGENT_PANEL_WIDTH_KEY = "canvas-agent-panel-width-v2";
@@ -28,8 +31,13 @@ export function AgentPanel() {
     const useHosted = hostedAgentConfigured && Boolean(user);
     const projectId = hostedScope.project?.id || "";
     const lastProjectIdRef = useRef(projectId);
+    const canvasRouteId = useMatch("/canvas/:id")?.params.id || "";
+    // 本机 Agent 的会话按项目隔离：进入画布就把作用域切到该项目（离开画布时保留上一个项目，避免无谓切换）。
+    // 必须在渲染阶段设置，子组件的 effect 先于父组件执行，首个请求就要带上项目。
+    if (!useHosted && canvasRouteId && currentAgentProjectId() !== canvasRouteId) setAgentProjectScope({ userId: canvasWorkspaceUserId(), projectId: canvasRouteId });
+    const localScopeKey = currentAgentProjectId() || "global";
 
-    // 本地 Agent 的会话存在本机守护进程里、没有项目维度，切项目时至少不要把上一个项目的消息留在屏幕上。
+    // 切项目时不要把上一个项目的消息留在屏幕上；本机侧栏按项目重新挂载，重新拉取该项目的会话。
     useEffect(() => {
         const previous = lastProjectIdRef.current;
         lastProjectIdRef.current = projectId;
@@ -77,7 +85,7 @@ export function AgentPanel() {
             >
                 <button type="button" className="absolute inset-y-0 left-0 z-40 w-4 -translate-x-1/2 cursor-col-resize" onPointerDown={startResize} aria-label={t("agent.panel.resize")} />
                 <div className="flex min-h-0 flex-1 flex-col">
-                    {useHosted ? <HostedAgentPanel key={hostedScope.project?.id || "unbound"} scope={hostedScope} /> : <LocalAgentPanel embedded />}
+                    {useHosted ? <HostedAgentPanel key={hostedScope.project?.id || "unbound"} scope={hostedScope} /> : <LocalAgentPanel key={localScopeKey} embedded />}
                 </div>
             </motion.aside>
         </motion.div>

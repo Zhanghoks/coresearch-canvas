@@ -85,6 +85,8 @@ let canvasToolHandler: CanvasToolHandler = async () => {
 const approvals = new Map<string, { resolve: (decision: string) => void }>();
 let host: PiHost | null = null;
 let hostStart: Promise<PiHost> | null = null;
+/** 当前项目的 Pi 会话目录；切换项目时由 HTTP 层在空闲时更新。 */
+let activeSessionDir = PI_SESSION_DIR;
 
 export { canvasSkillSource, assertDraftHasNoSensitiveValues } from "./skill-draft.js";
 
@@ -104,6 +106,12 @@ export function summarizeCodexThread(thread: unknown) {
         createdAt: Number(value.createdAt || 0),
         updatedAt: Number(value.updatedAt || 0),
     };
+}
+
+/** 切换会话目录（项目隔离）。调用方需保证当前没有运行中的 turn。 */
+export function setPiSessionDir(dir: string) {
+    activeSessionDir = dir || PI_SESSION_DIR;
+    if (host && host.sessionDir !== activeSessionDir) loadedThreadId = "";
 }
 
 /** 由 HTTP 层注入画布工具执行函数。 */
@@ -171,8 +179,9 @@ export async function resumeCodexThread(emit: AgentEmit, threadId: string, cwd?:
 }
 
 export async function listCodexThreads(emit: AgentEmit, options: { cwd: string; searchTerm?: string; limit?: number }) {
-    await getHost(emit, options.cwd, DEFAULT_AGENT_PERMISSION_MODE);
-    const sessions = await SessionManager.list(options.cwd, sessionDir());
+    void emit;
+    fs.mkdirSync(activeSessionDir, { recursive: true, mode: 0o700 });
+    const sessions = await SessionManager.list(options.cwd, activeSessionDir);
     const data = sessions
         .filter((item) => !options.searchTerm || `${item.firstMessage} ${item.name || ""}`.includes(options.searchTerm))
         .slice(0, options.limit || 40)
@@ -319,12 +328,16 @@ function historyPayload(runtime: PiHost) {
 }
 
 async function getHost(emit: AgentEmit, cwd: string, permissionMode: AgentPermissionMode) {
-    if (host && (!cwd || host.cwd === cwd)) {
+    if (hostStart) await hostStart.catch(() => undefined);
+    if (host && host.sessionDir === activeSessionDir && (!cwd || host.cwd === cwd)) {
         host.emit = emit;
         host.permissionMode = permissionMode;
         return host;
     }
-    hostStart ||= PiHost.start(emit, cwd, permissionMode);
+    const previous = host;
+    host = null;
+    if (previous) await previous.dispose().catch((error) => logger.warn("Failed to dispose Pi host", { error }));
+    hostStart = PiHost.start(emit, cwd || previous?.cwd || "", permissionMode, activeSessionDir);
     try {
         host = await hostStart;
         return host;
@@ -343,6 +356,7 @@ class PiHost {
 
     private constructor(
         readonly cwd: string,
+        readonly sessionDir: string,
         readonly runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>,
         emit: AgentEmit,
         permissionMode: AgentPermissionMode,
@@ -354,9 +368,9 @@ class PiHost {
         this.bindSession();
     }
 
-    static async start(emit: AgentEmit, cwd: string, permissionMode: AgentPermissionMode) {
+    static async start(emit: AgentEmit, cwd: string, permissionMode: AgentPermissionMode, sessionDir: string) {
         const workspace = cwd || process.cwd();
-        fs.mkdirSync(sessionDir(), { recursive: true, mode: 0o700 });
+        fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
         const modelRuntime = await getModelRuntime();
         const canvasTools = createCanvasTools((name, input) => canvasToolHandler(name, input));
         const skillState: SkillState = { enabled: loadSkillEnabled(workspace), all: [] };
@@ -398,14 +412,14 @@ class PiHost {
         const runtime = await createAgentSessionRuntime(createRuntime, {
             cwd: workspace,
             agentDir: PI_AGENT_DIR,
-            sessionManager: SessionManager.create(workspace, sessionDir()),
+            sessionManager: SessionManager.create(workspace, sessionDir),
         });
         const loaded = runtime.services.resourceLoader.getExtensions();
         logger.info("Pi extensions loaded", {
             extensions: loaded.extensions.map((item) => ({ path: item.path, tools: [...item.tools.keys()] })),
             errors: loaded.errors,
         });
-        return new PiHost(workspace, runtime, emit, permissionMode, skillState);
+        return new PiHost(workspace, sessionDir, runtime, emit, permissionMode, skillState);
     }
 
     get session(): AgentSession {
@@ -461,6 +475,12 @@ class PiHost {
         await this.runtime.services.resourceLoader.reload();
     }
 
+    async dispose() {
+        this.unsubscribe?.();
+        this.unsubscribe = undefined;
+        await this.runtime.dispose();
+    }
+
     async newThread() {
         await this.runtime.newSession();
         this.bindSession();
@@ -469,7 +489,7 @@ class PiHost {
 
     async openThread(threadId: string) {
         if (threadId === this.threadId) return;
-        const sessions = await SessionManager.list(this.cwd, sessionDir());
+        const sessions = await SessionManager.list(this.cwd, this.sessionDir);
         const match = sessions.find((item) => item.id === threadId);
         if (!match) throw new Error("session not found");
         const result = await this.runtime.switchSession(match.path);
@@ -486,7 +506,7 @@ class PiHost {
     }
 
     async archiveThread(threadId: string) {
-        const sessions = await SessionManager.list(this.cwd, sessionDir());
+        const sessions = await SessionManager.list(this.cwd, this.sessionDir);
         const match = sessions.find((item) => item.id === threadId);
         if (match) await fsPromises.unlink(match.path).catch(() => undefined);
         if (threadId === this.threadId) await this.newThread();
@@ -538,10 +558,6 @@ function latestUserEntryId(manager: SessionManager) {
         if (entry.type === "message" && entry.message.role === "user") return entry.id;
     }
     return "";
-}
-
-function sessionDir() {
-    return PI_SESSION_DIR;
 }
 
 function skillEnabledFile(cwd: string) {

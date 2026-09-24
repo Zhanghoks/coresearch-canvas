@@ -73,6 +73,14 @@ type CanvasClipboard = {
     connections: CanvasConnection[];
 };
 
+// 连线松手时的命中范围（屏幕像素，按缩放换算到画布坐标）。
+const CONNECTION_HANDLE_HIT_RADIUS = 40;
+const CONNECTION_NODE_HIT_PADDING = 32;
+const VIDEO_NODE_MAX_WIDTH = 420;
+const VIDEO_NODE_MAX_HEIGHT = 420;
+const NODE_STATUS_SUCCESS = "success" as const;
+const EMPTY_REFERENCES: CanvasResourceReference[] = [];
+
 type ConnectionDropTarget = {
     nodeId: string | null;
     isNearNode: boolean;
@@ -453,6 +461,8 @@ function InfiniteCanvasPage() {
             [...nodesRef.current]
                 .reverse()
                 .forEach((node) => {
+                    // 分组只是容器，不能作为连线目标；否则组内节点往外拖到组内空白处会被当成“靠近节点”而静默取消。
+                    if (node.type === CanvasNodeType.Group) return;
                     const anchor = getConnectionTargetAnchor(node, current);
                     const dx = world.x - anchor.x;
                     const dy = world.y - anchor.y;
@@ -736,10 +746,7 @@ function InfiniteCanvasPage() {
         setInfoNodeId(null);
         setDocumentNodeId(null);
         setCropNodeId(null);
-        setMaskEditNodeId(null);
-        setAngleNodeId(null);
         setPreviewNodeId(null);
-        setRunningNodeId(null);
         deselectCanvas();
         setClearConfirmOpen(false);
         cleanupCanvasFiles({ projectId, nodes: [], chatSessions: [] });
@@ -1399,7 +1406,6 @@ function InfiniteCanvasPage() {
                 setDialogNodeId(null);
                 setInfoNodeId(null);
                 setCropNodeId(null);
-                setMaskEditNodeId(null);
                 setPendingConnectionCreate(null);
             }
         };
@@ -1824,7 +1830,7 @@ function InfiniteCanvasPage() {
                     const source = JSON.parse(sourceRaw) as ResearchSourceCard;
                     if (source?.url && source.title) {
                         const position = screenToCanvas(event.clientX, event.clientY);
-                        const node = createCanvasNode(researchSourceNodeType(source), position, { sourceUrl: source.url, summary: source.summary || source.authors || "", status: "idle" });
+                        const node = createCanvasNode(researchSourceNodeType(source), position, { sourceUrl: source.url, summary: source.summary || "", authors: source.authors || "", status: "idle" });
                         node.title = source.title;
                         setNodes((prev) => [...prev, node]);
                         setSelectedNodeIds(new Set([node.id]));

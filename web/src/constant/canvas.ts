@@ -49,8 +49,8 @@ export const NODE_DEFAULT_SIZE = {
     [CanvasNodeType.Frame]: nodeSize(CanvasNodeType.Frame, 640, 400),
     [CanvasNodeType.Note]: nodeSize(CanvasNodeType.Note, 280, 200),
     [CanvasNodeType.Question]: nodeSize(CanvasNodeType.Question, 300, 180),
-    [CanvasNodeType.Pdf]: nodeSize(CanvasNodeType.Pdf, 300, 180),
-    [CanvasNodeType.Web]: nodeSize(CanvasNodeType.Web, 300, 180),
+    [CanvasNodeType.Pdf]: nodeSize(CanvasNodeType.Pdf, 300, 200),
+    [CanvasNodeType.Web]: nodeSize(CanvasNodeType.Web, 300, 200),
 } satisfies Record<CanvasNodeType, { width: number; height: number; title: string }>;
 
 export const NODE_SPECS = {

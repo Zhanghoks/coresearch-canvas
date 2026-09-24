@@ -6,6 +6,12 @@
             "runtimeExecutable": "bash",
             "runtimeArgs": ["-c", "cd web && bun run dev"],
             "port": 3000
+        },
+        {
+            "name": "canvas-agent",
+            "runtimeExecutable": "bash",
+            "runtimeArgs": ["-c", "cd canvas-agent && npm run dev"],
+            "port": 17371
         }
     ]
 }

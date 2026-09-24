@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { logger } from "../utils/logger.js";
 import { defaultDataRoot, projectDir, projectKey, sanitizeUserId, userDir } from "../workspace-paths.js";
 
 export type StoredCanvasProject = {
@@ -46,7 +47,7 @@ export class ProjectFileStore {
                 return null;
             }
         }));
-        return projects.filter((project): project is StoredCanvasProject => Boolean(project) && project.ownerUserId === sanitizeUserId(userId)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map(summaryOf);
+        return projects.filter((project): project is StoredCanvasProject => project !== null && project.ownerUserId === sanitizeUserId(userId)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map(summaryOf);
     }
 
     async get(userId: string, projectId: string): Promise<StoredCanvasProject> {
@@ -178,3 +179,53 @@ function isMissing(error: unknown) {
 }
 
 export { projectKey };
+
+/** 未登录时本机固定使用的用户 id。 */
+export const LOCAL_USER_ID = "local";
+
+/**
+ * 旧版网页按浏览器 localStorage 随机生成 `local-<uuid>` 用户，换浏览器或换地址就看到另一份项目列表。
+ * 启动时把这些目录合并到固定的 `local` 用户下；同名项目目录已存在时保留原位并记日志，不覆盖。
+ */
+export async function mergeLegacyLocalUsers(dataRoot = defaultDataRoot()) {
+    const usersRoot = path.join(dataRoot, "users");
+    let names: string[];
+    try {
+        names = await fs.readdir(usersRoot);
+    } catch (error) {
+        if (isMissing(error)) return [];
+        throw error;
+    }
+    const target = path.join(userDir(dataRoot, LOCAL_USER_ID), "projects");
+    const moved: string[] = [];
+    for (const name of names.filter((item) => /^local-[0-9a-f-]{36}$/i.test(item))) {
+        const legacyProjects = path.join(usersRoot, name, "projects");
+        const projectNames = await fs.readdir(legacyProjects).catch(() => [] as string[]);
+        await fs.mkdir(target, { recursive: true });
+        for (const projectName of projectNames) {
+            const source = path.join(legacyProjects, projectName);
+            if (!(await fs.stat(source)).isDirectory()) continue;
+            const destination = path.join(target, projectName);
+            if (await fs.stat(destination).then(() => true, () => false)) {
+                logger.warn("Legacy local project not merged: destination exists", { source, destination });
+                continue;
+            }
+            await fs.rename(source, destination);
+            const identityFile = path.join(destination, "project.json");
+            try {
+                const identity = JSON.parse(await fs.readFile(identityFile, "utf8")) as Record<string, unknown>;
+                identity.ownerUserId = LOCAL_USER_ID;
+                await fs.writeFile(identityFile, `${JSON.stringify(identity, null, 2)}\n`);
+            } catch (error) {
+                if (!isMissing(error)) throw error;
+            }
+            moved.push(destination);
+        }
+        // 只在旧目录除了空 projects/ 和 .DS_Store 之外什么都不剩时才删除。
+        const leftoverProjects = (await fs.readdir(legacyProjects).catch(() => [] as string[])).filter((item) => item !== ".DS_Store");
+        const leftoverEntries = (await fs.readdir(path.join(usersRoot, name))).filter((item) => item !== ".DS_Store" && item !== "projects");
+        if (!leftoverProjects.length && !leftoverEntries.length) await fs.rm(path.join(usersRoot, name), { recursive: true, force: true });
+    }
+    if (moved.length) logger.info("Merged legacy local projects", { count: moved.length, target });
+    return moved;
+}

@@ -51,6 +51,8 @@ const SITE_TOOLS = new Set<ToolName>(["site_navigate", "canvas_list_projects", "
 
 /** 管理网页画布连接、状态、附件和工具请求。 */
 export class CanvasSession {
+    /** 当前会话作用域的项目 id；为空表示全局会话。 */
+    eventProjectId = "";
     private clients = new Map<string, ServerResponse>();
     private clientFocusOrder = new Map<string, number>();
     private pending = new Map<string, PendingRequest>();
@@ -476,7 +478,9 @@ export class CanvasSession {
 
     /** 向全部已连接网页广播事件。 */
     emitAll(type: string, payload: unknown) {
-        this.clients.forEach((client) => sendEvent(client, type, payload));
+        // 标上事件所属项目，打开其他项目的网页据此忽略。
+        const data = this.eventProjectId && type !== "hello" && payload && typeof payload === "object" && !Array.isArray(payload) ? { ...payload, agentProjectId: this.eventProjectId } : payload;
+        this.clients.forEach((client) => sendEvent(client, type, data));
     }
 
     /** 向全部网页广播带线程归属的事件。 */

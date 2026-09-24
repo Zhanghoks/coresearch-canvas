@@ -3,7 +3,7 @@ import i18n from "@/i18n";
 import { summarizeCanvasAgentOps, type CanvasAgentOp } from "@/lib/canvas/canvas-agent-ops";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { randomId } from "@/lib/utils";
-import { resolveAgentMessageAssetUrl } from "@/services/api/canvas-agent";
+import { currentAgentProjectId, resolveAgentMessageAssetUrl } from "@/services/api/canvas-agent";
 import { useAgentStore, type AgentAttachment, type AgentChatItem, type AgentEventLog, type AgentMessageAttachment, type AgentTokenUsage } from "@/stores/use-agent-store";
 import type { AgentChatAttachment } from "./agent-chat-message";
 export const REASONING_PLACEHOLDER = i18n.t("agent.events.analyzing");
@@ -229,7 +229,12 @@ function changeAction(value: unknown) {
 
 export function parseEventData<T>(event: Event) {
     try {
-        return JSON.parse((event as MessageEvent).data) as T;
+        const data = JSON.parse((event as MessageEvent).data) as T;
+        // 本机 Agent 同时只服务一个项目；其他项目的事件不属于这个侧栏。
+        const eventProjectId = data && typeof data === "object" ? String((data as { agentProjectId?: unknown }).agentProjectId || "") : "";
+        const scopeProjectId = currentAgentProjectId();
+        if (eventProjectId && scopeProjectId && eventProjectId !== scopeProjectId) return null;
+        return data;
     } catch {
         return null;
     }

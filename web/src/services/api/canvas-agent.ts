@@ -233,9 +233,34 @@ export function deleteAgentCredential(endpoint: string, token: string, providerI
     return fetchAgentJson<{ ok?: boolean; data?: AgentProviderStatus[] }>(endpoint, token, `/agent/credentials/${encodeURIComponent(providerId)}`, { method: "DELETE" });
 }
 
+/** 本机 Agent 会话按项目隔离：侧栏当前服务的项目，随 /agent/codex/* 请求一起发送。 */
+let agentProjectScope: { userId: string; projectId: string } | null = null;
+
+export function setAgentProjectScope(scope: { userId: string; projectId: string } | null) {
+    agentProjectScope = scope?.projectId ? scope : null;
+}
+
+export function currentAgentProjectId() {
+    return agentProjectScope?.projectId || "";
+}
+
+/** EventSource 不能带请求头，用查询参数传项目作用域。 */
+export function agentProjectScopeQuery() {
+    if (!agentProjectScope) return "";
+    return `&projectId=${encodeURIComponent(agentProjectScope.projectId)}&userId=${encodeURIComponent(agentProjectScope.userId)}`;
+}
+
+function scopedInit(path: string, init?: RequestInit): RequestInit | undefined {
+    if (!agentProjectScope || !path.startsWith("/agent/codex")) return init;
+    const headers = new Headers(init?.headers);
+    headers.set("x-canvas-project-id", agentProjectScope.projectId);
+    headers.set("x-canvas-user-id", agentProjectScope.userId);
+    return { ...init, headers };
+}
+
 export async function fetchAgentJson<T>(endpoint: string, token: string, path: string, init?: RequestInit) {
     const url = `${endpoint}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
-    const res = await fetch(url, init);
+    const res = await fetch(url, scopedInit(path, init));
     const data = (await res.json().catch(() => ({}))) as T & { error?: string; msg?: string };
     if (!res.ok) throw new AgentApiError(res.status, data);
     return data;

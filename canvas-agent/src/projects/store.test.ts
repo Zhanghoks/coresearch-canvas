@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { projectDir } from "../workspace-paths.js";
-import { ProjectFileStore } from "./store.js";
+import { LOCAL_USER_ID, mergeLegacyLocalUsers, ProjectFileStore } from "./store.js";
 
 test("projects are isolated by user and stored under hashed keys", async (t) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-projects-"));
@@ -48,4 +48,26 @@ test("project ids never become filesystem paths", async (t) => {
     const entries = await fs.readdir(path.join(root, "users", "alice", "projects"));
     assert.equal(entries.length, 1);
     assert.match(entries[0], /^[a-f0-9]{24}$/);
+});
+
+test("legacy random local users are merged into the fixed local user", async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-projects-"));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const store = new ProjectFileStore(root);
+    const legacyA = "local-11111111-1111-4111-8111-111111111111";
+    const legacyB = "local-22222222-2222-4222-8222-222222222222";
+    await store.put(legacyA, { id: "project-a", title: "A", nodes: [{ id: "n1" }], connections: [] });
+    await store.put(legacyB, { id: "project-b", title: "B", nodes: [], connections: [] });
+    await store.put("alice", { id: "project-c", title: "C", nodes: [], connections: [] });
+
+    const moved = await mergeLegacyLocalUsers(root);
+
+    assert.equal(moved.length, 2);
+    const merged = await store.list(LOCAL_USER_ID);
+    assert.equal(merged.map((item) => item.id).sort().join(","), "project-a,project-b");
+    assert.equal((await store.get(LOCAL_USER_ID, "project-a")).nodes?.length, 1);
+    assert.equal((await store.list("alice")).length, 1);
+    const users = (await fs.readdir(path.join(root, "users"))).sort();
+    assert.deepEqual(users, ["alice", LOCAL_USER_ID]);
+    assert.equal((await mergeLegacyLocalUsers(root)).length, 0);
 });
